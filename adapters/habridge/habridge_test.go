@@ -28,6 +28,7 @@ type fakeHA struct {
 	states   map[string]haEntity
 	upgrader websocket.Upgrader
 	silent   bool // do not emit state_changed after call_service
+	broken   bool // accept call_service but do NOT apply the state
 }
 
 func newFakeHA(silent bool) *fakeHA {
@@ -84,12 +85,14 @@ func (f *fakeHA) handler(w http.ResponseWriter, r *http.Request) {
 			service := req["service"].(string)
 			f.mu.Lock()
 			e := f.states[target]
-			if strings.HasSuffix(service, "_on") {
-				e.State = "on"
-			} else {
-				e.State = "off"
+			if !f.broken {
+				if strings.HasSuffix(service, "_on") {
+					e.State = "on"
+				} else {
+					e.State = "off"
+				}
+				f.states[target] = e
 			}
-			f.states[target] = e
 			f.mu.Unlock()
 			writeJSON(map[string]any{"id": id, "type": "result", "success": true})
 			if subscribed && !f.silent {
@@ -103,8 +106,13 @@ func (f *fakeHA) handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func startRig(t *testing.T, silent bool) (*Adapter, *memSink) {
+	return startRigMode(t, silent, false)
+}
+
+func startRigMode(t *testing.T, silent, broken bool) (*Adapter, *memSink) {
 	t.Helper()
 	f := newFakeHA(silent)
+	f.broken = broken
 	srv := httptest.NewServer(http.HandlerFunc(f.handler))
 	t.Cleanup(srv.Close)
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/websocket"
@@ -164,7 +172,11 @@ func TestServiceCallVerifiedByEvent(t *testing.T) {
 	}
 }
 
-func TestSilentHAUnverified(t *testing.T) {
+// TestSilentButAppliedVerifiedByLiveRead: no state_changed event (idempotent
+// actuation / quiet HA) but the state IS the target → the live-read fallback
+// verifies it. The realworld tier caught this on its first CI run
+// (light.ceiling_lights starts ON in the HA demo).
+func TestSilentButAppliedVerifiedByLiveRead(t *testing.T) {
 	a, _ := startRig(t, true)
 	eff, err := a.Invoke(context.Background(), sdk.Call{
 		DeviceID: "switch.kettle", Capability: "switch.onoff", Args: map[string]any{"on": true},
@@ -172,8 +184,23 @@ func TestSilentHAUnverified(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if eff.Status != effect.Unverified {
-		t.Fatalf("no event = UNVERIFIED, got %+v", eff)
+	if !eff.Verifiable() || eff.Record.Metrics["switch_onoff"] != 1 {
+		t.Fatalf("applied state must verify via live read: %+v", eff)
+	}
+}
+
+// TestBrokenActuationFails: call_service succeeds but the state never
+// changes → live read contradicts the request → FAILED, never a fake OK.
+func TestBrokenActuationFails(t *testing.T) {
+	a, _ := startRigMode(t, true, true)
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "switch.kettle", Capability: "switch.onoff", Args: map[string]any{"on": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eff.Status != effect.Failed {
+		t.Fatalf("contradicting live read must FAIL, got %+v", eff)
 	}
 }
 

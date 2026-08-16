@@ -332,12 +332,36 @@ func (a *Adapter) Invoke(ctx context.Context, call sdk.Call) (effect.Effect, err
 			}
 			return b.Fail(fmt.Sprintf("readback mismatch: state %q", ns.State)).Build(), nil
 		case <-time.After(a.cfg.Timeout):
-			return sdk.NewEffect().Build(), nil // UNVERIFIED
+			// No event ≠ no effect: idempotent actuation (turn_on on a lit
+			// light) emits no state_changed. Verify by live read — a lesson
+			// the realworld tier taught on its first CI run.
+			return a.liveVerifySet(ctx, call.DeviceID, metric, want)
 		case <-ctx.Done():
 			return effect.Effect{}, ctx.Err()
 		}
 	}
 
+	return a.liveRead(ctx, call.DeviceID, metric)
+}
+
+// liveVerifySet settles a set whose event window elapsed: a live state read
+// equal to the target verifies it; a contradicting read means the actuation
+// did not take (FAILED), an unreadable state stays UNVERIFIED.
+func (a *Adapter) liveVerifySet(ctx context.Context, entityID, metric string, want bool) (effect.Effect, error) {
+	eff, err := a.liveRead(ctx, entityID, metric)
+	if err != nil || eff.Record == nil {
+		return sdk.NewEffect().Build(), nil // sent, unconfirmed
+	}
+	got := eff.Record.Metrics[metric] == 1.0
+	if got == want {
+		return eff, nil // live read confirms the target state
+	}
+	return sdk.NewEffect().Metric(metric, eff.Record.Metrics[metric]).
+		Fail("state readback contradicts requested state").Build(), nil
+}
+
+// liveRead fetches the entity's current state via get_states.
+func (a *Adapter) liveRead(ctx context.Context, entityID, metric string) (effect.Effect, error) {
 	// GET: live read via get_states.
 	raw, err := a.call(ctx, map[string]any{"type": "get_states"})
 	if err != nil {
@@ -348,7 +372,7 @@ func (a *Adapter) Invoke(ctx context.Context, call sdk.Call) (effect.Effect, err
 		return effect.Effect{}, err
 	}
 	for _, e := range entities {
-		if e.EntityID != call.DeviceID {
+		if e.EntityID != entityID {
 			continue
 		}
 		if strings.EqualFold(e.State, "on") || strings.EqualFold(e.State, "off") {
