@@ -39,3 +39,20 @@ jobs:
       - name: teardown
         if: always()
         run: ./test/realworld/down.sh
+
+  unplug:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        tags: ["no_modbus", "no_mqtt", "no_ha", "no_sim", "no_modbus,no_mqtt,no_ha,no_sim"]
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build without ${{ matrix.tags }}
+        run: go build -tags "${{ matrix.tags }}" ./...
+      - name: boot without ${{ matrix.tags }}
+        run: go run -tags "${{ matrix.tags }}" ./cmd/anetlinkd --demo

@@ -5,25 +5,26 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ANetResearch/ANetLink/adapters/habridge"
-	"github.com/ANetResearch/ANetLink/adapters/modbus"
-	"github.com/ANetResearch/ANetLink/adapters/mqttbridge"
 	"github.com/ANetResearch/ANetLink/runtime"
 )
 
-// fileConfig is anetlinkd's on-disk configuration (JSON, v0).
+// fileConfig is anetlinkd's on-disk configuration (JSON).
+//
+//	{
+//	  "backend_override": {"mqtt": "zigbee2mqtt"},
+//	  "adapters": {
+//	    "sim":           {"enabled": true},
+//	    "modbus":        { ...modbus.Config... },
+//	    "mqtt":          { ...mqttbridge.Config... },
+//	    "homeassistant": { ...habridge.Config... }
+//	  }
+//	}
+//
+// An adapter key only takes effect when its plugin is compiled in
+// (`no_<name>` build tags subtract plugins — K207 presets).
 type fileConfig struct {
-	// BackendOverride forces a named backend per adapter (A5 escape hatch).
-	BackendOverride map[string]string `json:"backend_override,omitempty"`
-	// Modbus configures the modbus adapter; absent = adapter not registered.
-	Modbus *modbus.Config `json:"modbus,omitempty"`
-	// Mqtt configures the zigbee2mqtt/Tasmota bridge; absent = not registered.
-	Mqtt *mqttbridge.Config `json:"mqtt,omitempty"`
-	// HomeAssistant configures the HA bridge; absent = not registered.
-	HomeAssistant *habridge.Config `json:"homeassistant,omitempty"`
-	// Sim keeps the simulator lamp registered (default true, so a bare
-	// anetlinkd always has something to show).
-	Sim *bool `json:"sim,omitempty"`
+	BackendOverride map[string]string          `json:"backend_override,omitempty"`
+	Adapters        map[string]json.RawMessage `json:"adapters,omitempty"`
 }
 
 func loadConfig(path string) (*fileConfig, error) {
@@ -41,8 +42,34 @@ func loadConfig(path string) (*fileConfig, error) {
 	return &c, nil
 }
 
-func (c *fileConfig) simEnabled() bool { return c.Sim == nil || *c.Sim }
-
 func (c *fileConfig) runtimeConfig() runtime.Config {
 	return runtime.Config{BackendOverride: c.BackendOverride}
+}
+
+// buildAdapters instantiates every compiled-in plugin that is configured
+// (or default-on). Unknown config keys fail loudly: a configured adapter
+// whose plugin was compiled out is an operator error, not a silent no-op.
+func (c *fileConfig) buildAdapters() ([]namedAdapter, error) {
+	known := map[string]bool{}
+	var out []namedAdapter
+	for _, p := range plugins {
+		known[p.name] = true
+		raw, configured := c.Adapters[p.name]
+		if !configured && !p.defaultOn {
+			continue
+		}
+		a, err := p.fromJSON(raw)
+		if err != nil {
+			return nil, fmt.Errorf("adapter %q: %w", p.name, err)
+		}
+		if a != nil {
+			out = append(out, namedAdapter{p.name, a})
+		}
+	}
+	for key := range c.Adapters {
+		if !known[key] {
+			return nil, fmt.Errorf("adapter %q configured but not compiled into this build (no_%s?)", key, key)
+		}
+	}
+	return out, nil
 }

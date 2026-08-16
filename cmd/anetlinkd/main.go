@@ -14,10 +14,6 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/ANetResearch/ANetLink/adapters/habridge"
-	"github.com/ANetResearch/ANetLink/adapters/modbus"
-	"github.com/ANetResearch/ANetLink/adapters/mqttbridge"
-	"github.com/ANetResearch/ANetLink/adapters/sim"
 	"github.com/ANetResearch/ANetLink/northbound/c1serv"
 	"github.com/ANetResearch/ANetLink/northbound/mcpserv"
 	"github.com/ANetResearch/ANetLink/runtime"
@@ -37,26 +33,16 @@ func main() {
 		log.Fatalf("anetlinkd: %v", err)
 	}
 	rt := runtime.New(cfg.runtimeConfig())
-	if cfg.simEnabled() {
-		if err := rt.Register(sim.New()); err != nil {
+	adapters, err := cfg.buildAdapters()
+	if err != nil {
+		log.Fatalf("anetlinkd: %v", err)
+	}
+	for _, na := range adapters {
+		if err := rt.Register(na.Adapter); err != nil {
 			log.Fatalf("anetlinkd: %v", err)
 		}
 	}
-	if cfg.Modbus != nil {
-		if err := rt.Register(modbus.New(*cfg.Modbus)); err != nil {
-			log.Fatalf("anetlinkd: %v", err)
-		}
-	}
-	if cfg.Mqtt != nil {
-		if err := rt.Register(mqttbridge.New(*cfg.Mqtt)); err != nil {
-			log.Fatalf("anetlinkd: %v", err)
-		}
-	}
-	if cfg.HomeAssistant != nil {
-		if err := rt.Register(habridge.New(*cfg.HomeAssistant)); err != nil {
-			log.Fatalf("anetlinkd: %v", err)
-		}
-	}
+	log.Printf("adapters compiled+configured: %s", adapterNames(adapters))
 	ctx := context.Background()
 	if err := rt.Start(ctx); err != nil {
 		log.Fatalf("anetlinkd: %v", err)
@@ -87,13 +73,19 @@ func main() {
 	}
 
 	if *demo {
-		key := runtime.DeviceKey{Adapter: "sim", Device: sim.DeviceID}
-		eff, err := rt.Invoke(ctx, key, "light.onoff", map[string]any{"on": true})
+		if len(rt.Devices()) == 0 {
+			fmt.Println("demo: no devices (sim compiled out or disabled) — inventory empty, exiting 0")
+			return
+		}
+		d0 := rt.Devices()[0]
+		key := runtime.DeviceKey{Adapter: d0.Profile.Protocol, Device: d0.ID}
+		capID := d0.Profile.Caps[0].ID
+		eff, err := rt.Invoke(ctx, key, capID, map[string]any{"on": true})
 		if err != nil {
 			log.Fatalf("anetlinkd: demo invoke: %v", err)
 		}
-		fmt.Printf("demo: light.onoff on=true → status=%s verifiable=%v metrics=%v\n",
-			eff.Status, eff.Verifiable(), eff.Record.Metrics)
+		fmt.Printf("demo: %s on=true → status=%s verifiable=%v metrics=%v\n",
+			capID, eff.Status, eff.Verifiable(), eff.Record.Metrics)
 		return
 	}
 
