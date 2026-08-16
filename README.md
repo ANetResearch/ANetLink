@@ -58,3 +58,5 @@ enforcement · `adapters/` protocol adapters (start at `sim`) ·
 Design corpus: K207 (anet4 module architecture), DocsANetLink 00–10.
 Kernel types come from [ANetCore](https://github.com/ANetResearch/ANetCore)
 (Apache-2.0): `effect.Effect`, `tsir.EffectRecord`, CoreDet-CBOR, CIDs.
+
+License: ANetLink ANet Open Source License.
