@@ -22,3 +22,20 @@ jobs:
         run: go test ./...
       - name: demo boots
         run: go run ./cmd/anetlinkd --demo
+
+  realworld:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: bring up real services (mosquitto / modbus / Home Assistant)
+        run: ./test/realworld/up.sh
+      - name: realworld tests against real services
+        run: ./test/realworld/run.sh
+      - name: teardown
+        if: always()
+        run: ./test/realworld/down.sh
