@@ -96,11 +96,11 @@ type Prover struct {
 
 // Verifier is the device side.
 type Verifier struct {
-	w0   *big.Int
-	L    []byte // w1*G, registered
-	y    []byte // random scalar
-	Lx   *big.Int
-	Ly   *big.Int
+	w0 *big.Int
+	L  []byte // w1*G, registered
+	y  []byte // random scalar
+	Lx *big.Int
+	Ly *big.Int
 }
 
 // NewProver seeds a prover with (w0,w1) and a caller-supplied random scalar x
@@ -173,9 +173,9 @@ func bigTo32(v *big.Int) []byte {
 
 // Confirmation carries the derived key material.
 type Confirmation struct {
-	Ke      []byte // shared secret (Matter's SessionKey seed)
-	CAtoB   []byte // prover→verifier confirmation MAC
-	CBtoA   []byte // verifier→prover confirmation MAC
+	Ke    []byte // shared secret (Matter's SessionKey seed)
+	CAtoB []byte // prover→verifier confirmation MAC
+	CBtoA []byte // verifier→prover confirmation MAC
 }
 
 // proverKeys/verifierKeys complete the exchange from each side's private
