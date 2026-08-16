@@ -40,6 +40,11 @@ stacks land per the coverage matrix below.
 | Matter (IP) | existing controller/HA | pure-Go stack (SPAKE2+/CASE + codegen clusters) |
 | Thread | host OTBR | bundled OTBR (managed subprocess) |
 
+## 使用手册
+
+完整操作指南见 [docs/MANUAL-zh.md](docs/MANUAL-zh.md)：安装、配置、每个适配器、
+MCP/C1 集成、信任模型、测试三层、故障排查、写自己的适配器。
+
 ## Try it
 
 ```bash
