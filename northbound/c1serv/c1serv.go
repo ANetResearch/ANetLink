@@ -1,0 +1,124 @@
+// Package c1serv is ANetLink's C1 wire surface: an HTTP-over-UDS API the
+// ANet daemon's provider shim consumes. The wire carries capabilities as
+// opaque ids of the form "<capability>@<adapter>/<device>" — the daemon
+// never parses them (red line: no device concept crosses C1); only this
+// package mints and resolves the form.
+//
+// Wire (v0, JSON):
+//
+//	GET  /v0/health        → 204
+//	GET  /v0/capabilities  → {"capabilities": ["light.onoff@sim/lamp-1", ...]}
+//	GET  /v0/describe      → {"cid": ""}            (DeviceCatalog CAS object: later)
+//	POST /v0/invoke        {"capability": "...", "args": {...}, "call_id": "..."}
+//	                       → {"status": "...", "metrics": {...}, "message": "..."}
+package c1serv
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"strings"
+
+	"github.com/ANetResearch/ANetLink/runtime"
+)
+
+// CapabilityID mints the C1 wire id for one device capability.
+func CapabilityID(capID string, key runtime.DeviceKey) string {
+	return capID + "@" + key.String()
+}
+
+// ParseCapabilityID resolves a C1 wire id back to (capability, device key).
+func ParseCapabilityID(s string) (capID string, key runtime.DeviceKey, err error) {
+	at := strings.LastIndexByte(s, '@')
+	if at <= 0 || at == len(s)-1 {
+		return "", runtime.DeviceKey{}, fmt.Errorf("c1serv: malformed capability id %q", s)
+	}
+	capID = s[:at]
+	rest := s[at+1:]
+	slash := strings.IndexByte(rest, '/')
+	if slash <= 0 || slash == len(rest)-1 {
+		return "", runtime.DeviceKey{}, fmt.Errorf("c1serv: malformed device key in %q", s)
+	}
+	return capID, runtime.DeviceKey{Adapter: rest[:slash], Device: rest[slash+1:]}, nil
+}
+
+type invokeReq struct {
+	Capability string         `json:"capability"`
+	Args       map[string]any `json:"args,omitempty"`
+	CallID     string         `json:"call_id,omitempty"`
+	CallerAID  string         `json:"caller_aid,omitempty"`
+}
+
+type invokeResp struct {
+	Status  string             `json:"status"`
+	Metrics map[string]float64 `json:"metrics,omitempty"`
+	Message string             `json:"message,omitempty"`
+}
+
+// Handler builds the C1 HTTP handler over a started runtime.
+func Handler(rt *runtime.Runtime) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v0/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /v0/capabilities", func(w http.ResponseWriter, _ *http.Request) {
+		var caps []string
+		for _, d := range rt.Devices() {
+			key := runtime.DeviceKey{Adapter: d.Profile.Protocol, Device: d.ID}
+			for _, c := range d.Profile.Caps {
+				caps = append(caps, CapabilityID(c.ID, key))
+			}
+		}
+		writeJSON(w, map[string]any{"capabilities": caps})
+	})
+	mux.HandleFunc("GET /v0/describe", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"cid": ""})
+	})
+	mux.HandleFunc("POST /v0/invoke", func(w http.ResponseWriter, r *http.Request) {
+		var req invokeReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		capID, key, err := ParseCapabilityID(req.Capability)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		eff, err := rt.Invoke(r.Context(), key, capID, req.Args)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		resp := invokeResp{Status: string(eff.Status), Message: eff.Message}
+		if eff.Record != nil {
+			resp.Metrics = eff.Record.Metrics
+		}
+		writeJSON(w, resp)
+	})
+	return mux
+}
+
+// Serve listens on a unix socket until ctx is done.
+func Serve(ctx context.Context, rt *runtime.Runtime, socketPath string) error {
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return fmt.Errorf("c1serv: listen %s: %w", socketPath, err)
+	}
+	srv := &http.Server{Handler: Handler(rt)}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Close()
+	}()
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
+}

@@ -15,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ANetResearch/ANetLink/adapters/sim"
+	"github.com/ANetResearch/ANetLink/northbound/c1serv"
 	"github.com/ANetResearch/ANetLink/northbound/mcpserv"
 	"github.com/ANetResearch/ANetLink/runtime"
 )
@@ -24,6 +25,7 @@ const version = "0.1.0"
 func main() {
 	demo := flag.Bool("demo", false, "run one demo invocation and exit")
 	serveMCP := flag.Bool("mcp", false, "serve the MCP northbound on stdio (for Claude Code / IDE clients)")
+	c1Socket := flag.String("c1-socket", "", "serve the C1 provider wire on this unix socket (for the ANet daemon shim)")
 	flag.Parse()
 
 	rt := runtime.New(runtime.Config{})
@@ -40,6 +42,15 @@ func main() {
 		cid, _ := d.Profile.CID()
 		log.Printf("device %s/%s online=%v trust=T%d profile=%s",
 			d.Profile.Protocol, d.ID, d.Online, d.Profile.MaxTrust, cid)
+	}
+
+	if *c1Socket != "" {
+		go func() {
+			if err := c1serv.Serve(ctx, rt, *c1Socket); err != nil {
+				log.Fatalf("anetlinkd: c1: %v", err)
+			}
+		}()
+		log.Printf("c1 provider wire on %s", *c1Socket)
 	}
 
 	if *serveMCP {
