@@ -16,10 +16,13 @@ import (
 	"github.com/ANetResearch/ANetLink/sdk"
 )
 
-type memSink struct{ devices map[string]sdk.Device }
+type memSink struct {
+	mu      sync.Mutex
+	devices map[string]sdk.Device
+}
 
-func (m *memSink) UpsertDevice(d sdk.Device)        { m.devices[d.ID] = d }
-func (m *memSink) RemoveDevice(id string)           { delete(m.devices, id) }
+func (m *memSink) UpsertDevice(d sdk.Device)        { m.mu.Lock(); m.devices[d.ID] = d; m.mu.Unlock() }
+func (m *memSink) RemoveDevice(id string)           { m.mu.Lock(); delete(m.devices, id); m.mu.Unlock() }
 func (m *memSink) State(string, map[string]float64) {}
 
 // fakeHA implements the subset of the HA WebSocket API the bridge uses.
@@ -146,14 +149,14 @@ func TestProbeAuth(t *testing.T) {
 
 func TestEntityMapping(t *testing.T) {
 	_, sink := startRig(t, false)
-	sw, ok := sink.devices["switch.kettle"]
+	sw, ok := sink.get("switch.kettle")
 	if !ok {
 		t.Fatal("switch not exposed")
 	}
 	if _, ok := sw.Profile.Find("switch.onoff"); !ok {
 		t.Fatalf("switch capability missing: %+v", sw.Profile.Caps)
 	}
-	se := sink.devices["sensor.kitchen_temp"]
+	se, _ := sink.get("sensor.kitchen_temp")
 	if c, ok := se.Profile.Find("sensor.temperature"); !ok || c.Unit != "°C" {
 		t.Fatalf("sensor mapping wrong: %+v", se.Profile.Caps)
 	}
@@ -216,3 +219,16 @@ func TestSensorLiveRead(t *testing.T) {
 }
 
 var _ = json.Marshal // keep import if fixture changes
+
+func (m *memSink) get(id string) (sdk.Device, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.devices[id]
+	return d, ok
+}
+
+func (m *memSink) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.devices)
+}

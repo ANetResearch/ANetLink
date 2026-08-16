@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,10 +17,13 @@ import (
 	"github.com/ANetResearch/ANetLink/sdk"
 )
 
-type memSink struct{ devices map[string]sdk.Device }
+type memSink struct {
+	mu      sync.Mutex
+	devices map[string]sdk.Device
+}
 
-func (m *memSink) UpsertDevice(d sdk.Device)        { m.devices[d.ID] = d }
-func (m *memSink) RemoveDevice(id string)           { delete(m.devices, id) }
+func (m *memSink) UpsertDevice(d sdk.Device)        { m.mu.Lock(); m.devices[d.ID] = d; m.mu.Unlock() }
+func (m *memSink) RemoveDevice(id string)           { m.mu.Lock(); delete(m.devices, id); m.mu.Unlock() }
 func (m *memSink) State(string, map[string]float64) {}
 
 const devicesJSON = `[
@@ -95,14 +99,11 @@ func TestProbeFindsZ2M(t *testing.T) {
 
 func TestDiscoveryMapsExposes(t *testing.T) {
 	_, sink := startAdapter(t, fakeZ2M(t, false))
-	lamp, ok := sink.devices["lamp"]
-	if !ok {
-		t.Fatal("lamp not discovered")
-	}
+	lamp := sink.await(t, "lamp")
 	if _, ok := lamp.Profile.Find("switch.onoff"); !ok {
 		t.Fatalf("nested binary state not mapped: %+v", lamp.Profile.Caps)
 	}
-	cl := sink.devices["climate"]
+	cl := sink.await(t, "climate")
 	if c, ok := cl.Profile.Find("sensor.temperature"); !ok || c.Unit != "°C" {
 		t.Fatalf("numeric expose not mapped: %+v", cl.Profile.Caps)
 	}
@@ -143,4 +144,32 @@ func TestSensorGet(t *testing.T) {
 	if !eff.Verifiable() || eff.Record.Metrics["sensor_temperature"] != 23.5 {
 		t.Fatalf("sensor get wrong: %+v", eff)
 	}
+}
+
+func (m *memSink) get(id string) (sdk.Device, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.devices[id]
+	return d, ok
+}
+
+func (m *memSink) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.devices)
+}
+
+// await polls (locked) for a device to appear — discovery lands on a
+// callback goroutine, so a bare read after Start is both racy and flaky.
+func (m *memSink) await(t *testing.T, id string) sdk.Device {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if d, ok := m.get(id); ok {
+			return d
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("device %q never discovered", id)
+	return sdk.Device{}
 }

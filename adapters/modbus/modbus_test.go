@@ -3,6 +3,7 @@ package modbus
 import (
 	"context"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,10 +14,13 @@ import (
 	"github.com/ANetResearch/ANetLink/sdk"
 )
 
-type memSink struct{ devices map[string]sdk.Device }
+type memSink struct {
+	mu      sync.Mutex
+	devices map[string]sdk.Device
+}
 
-func (m *memSink) UpsertDevice(d sdk.Device)        { m.devices[d.ID] = d }
-func (m *memSink) RemoveDevice(id string)           { delete(m.devices, id) }
+func (m *memSink) UpsertDevice(d sdk.Device)        { m.mu.Lock(); m.devices[d.ID] = d; m.mu.Unlock() }
+func (m *memSink) RemoveDevice(id string)           { m.mu.Lock(); delete(m.devices, id); m.mu.Unlock() }
 func (m *memSink) State(string, map[string]float64) {}
 
 func freePort(t *testing.T) string {
@@ -61,7 +65,7 @@ func testRig(t *testing.T) (*mbserver.Server, *Adapter, *memSink) {
 
 func TestDiscoveryAndTrust(t *testing.T) {
 	_, _, sink := testRig(t)
-	d, ok := sink.devices["plc-1"]
+	d, ok := sink.get("plc-1")
 	if !ok || !d.Online {
 		t.Fatalf("device missing/offline: %+v", d)
 	}
@@ -123,7 +127,7 @@ func TestUnreachableDeviceOffline(t *testing.T) {
 	if err := a.Start(context.Background(), b, sink); err != nil {
 		t.Fatal(err)
 	}
-	if sink.devices["dead-1"].Online {
+	if d, _ := sink.get("dead-1"); d.Online {
 		t.Fatal("unreachable device must report offline")
 	}
 	eff, err := a.Invoke(context.Background(), sdk.Call{DeviceID: "dead-1", Capability: "switch.onoff", Args: map[string]any{"on": true}})
@@ -133,4 +137,17 @@ func TestUnreachableDeviceOffline(t *testing.T) {
 	if eff.Status != effect.Unavailable {
 		t.Fatalf("dead target must be UNAVAILABLE, got %+v", eff)
 	}
+}
+
+func (m *memSink) get(id string) (sdk.Device, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.devices[id]
+	return d, ok
+}
+
+func (m *memSink) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.devices)
 }

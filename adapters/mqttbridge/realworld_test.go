@@ -64,11 +64,11 @@ func TestRealBrokerZ2MFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Stop(context.Background())
-	if len(sink.devices) == 0 {
+	if sink.count() == 0 {
 		t.Fatal("no devices discovered over the real broker")
 	}
 	if live {
-		t.Logf("live zigbee2mqtt inventory: %d devices — actuation left to operator-supervised runs", len(sink.devices))
+		t.Logf("live zigbee2mqtt inventory: %d devices — actuation left to operator-supervised runs", sink.count())
 		return
 	}
 

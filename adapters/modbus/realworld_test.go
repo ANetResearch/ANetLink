@@ -42,7 +42,7 @@ func TestRealServerCoilRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Stop(context.Background())
-	if !sink.devices["real-1"].Online {
+	if d, _ := sink.get("real-1"); !d.Online {
 		t.Fatal("real server must probe online")
 	}
 

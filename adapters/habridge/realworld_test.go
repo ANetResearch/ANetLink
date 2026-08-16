@@ -38,16 +38,18 @@ func TestRealHomeAssistant(t *testing.T) {
 	defer a.Stop(context.Background())
 
 	var lightID string
+	sink.mu.Lock()
 	for id := range sink.devices {
 		if strings.HasPrefix(id, "light.") {
 			lightID = id
 			break
 		}
 	}
+	sink.mu.Unlock()
 	if lightID == "" {
-		t.Fatalf("real HA exposed no light entities (demo: integration missing?); got %d devices", len(sink.devices))
+		t.Fatalf("real HA exposed no light entities (demo: integration missing?); got %d devices", sink.count())
 	}
-	t.Logf("real HA inventory: %d entities; actuating %s", len(sink.devices), lightID)
+	t.Logf("real HA inventory: %d entities; actuating %s", sink.count(), lightID)
 
 	for _, want := range []bool{true, false} {
 		eff, err := a.Invoke(context.Background(), sdk.Call{
