@@ -4,13 +4,18 @@ go 1.26.1
 
 require (
 	github.com/ANetResearch/ANetCore v0.2.0
+	github.com/grid-x/modbus v0.0.0-20260701064235-82e41c9acfb6
 	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/tbrandon/mbserver v0.0.0-20231208015628-36eb59221ac2
 )
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.2 // indirect
+	github.com/goburrow/modbus v0.1.0 // indirect
+	github.com/goburrow/serial v0.1.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
+	github.com/grid-x/serial v0.0.0-20211107191517-583c7356b3aa // indirect
 	github.com/ipfs/go-cid v0.6.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
 	github.com/minio/sha256-simd v1.0.0 // indirect

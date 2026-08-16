@@ -14,6 +14,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/ANetResearch/ANetLink/adapters/modbus"
 	"github.com/ANetResearch/ANetLink/adapters/sim"
 	"github.com/ANetResearch/ANetLink/northbound/c1serv"
 	"github.com/ANetResearch/ANetLink/northbound/mcpserv"
@@ -25,12 +26,24 @@ const version = "0.1.0"
 func main() {
 	demo := flag.Bool("demo", false, "run one demo invocation and exit")
 	serveMCP := flag.Bool("mcp", false, "serve the MCP northbound on stdio (for Claude Code / IDE clients)")
+	configPath := flag.String("config", "", "path to anetlinkd JSON config")
 	c1Socket := flag.String("c1-socket", "", "serve the C1 provider wire on this unix socket (for the ANet daemon shim)")
 	flag.Parse()
 
-	rt := runtime.New(runtime.Config{})
-	if err := rt.Register(sim.New()); err != nil {
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
 		log.Fatalf("anetlinkd: %v", err)
+	}
+	rt := runtime.New(cfg.runtimeConfig())
+	if cfg.simEnabled() {
+		if err := rt.Register(sim.New()); err != nil {
+			log.Fatalf("anetlinkd: %v", err)
+		}
+	}
+	if cfg.Modbus != nil {
+		if err := rt.Register(modbus.New(*cfg.Modbus)); err != nil {
+			log.Fatalf("anetlinkd: %v", err)
+		}
 	}
 	ctx := context.Background()
 	if err := rt.Start(ctx); err != nil {
