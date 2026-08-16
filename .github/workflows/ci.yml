@@ -56,3 +56,15 @@ jobs:
         run: go build -tags "${{ matrix.tags }}" ./...
       - name: boot without ${{ matrix.tags }}
         run: go run -tags "${{ matrix.tags }}" ./cmd/anetlinkd --demo
+
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: tests under the race detector
+        env:
+          CGO_ENABLED: "1"   # -race needs cgo; runners ship gcc
+        run: go test -race ./...

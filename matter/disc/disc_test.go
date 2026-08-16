@@ -83,3 +83,25 @@ func TestIgnoresGarbageAndForeignServices(t *testing.T) {
 		t.Fatal("garbage must not create nodes")
 	}
 }
+
+func TestPackQuerySetsQUBit(t *testing.T) {
+	b, err := packQuery(ServiceCommissionable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p dnsmessage.Parser
+	h, err := p.Start(b)
+	if err != nil || h.Response {
+		t.Fatalf("query must be a well-formed non-response: %v %v", h, err)
+	}
+	q, err := p.Question()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Type != dnsmessage.TypePTR || q.Class&0x8000 == 0 {
+		t.Fatalf("PTR + QU bit required, got type=%v class=%#x", q.Type, q.Class)
+	}
+	if q.Name.String() != ServiceCommissionable {
+		t.Fatalf("service name: %s", q.Name)
+	}
+}

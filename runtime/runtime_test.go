@@ -91,3 +91,56 @@ func TestTrustClampDowngradesOK(t *testing.T) {
 		t.Fatalf("T1 device claiming OK must be downgraded to UNVERIFIED, got %s", eff.Status)
 	}
 }
+
+// twoBackendAdapter exposes a host-preferred and a native backend so the
+// override machinery can be exercised end to end.
+type twoBackendAdapter struct {
+	*sim.Adapter
+	started string
+}
+
+func (a *twoBackendAdapter) Info() sdk.Info { return sdk.Info{Name: "dual", Protocol: "sim"} }
+func (a *twoBackendAdapter) Backends() []sdk.Backend {
+	return []sdk.Backend{namedBackend{"host", true}, namedBackend{"native", true}}
+}
+func (a *twoBackendAdapter) Start(ctx context.Context, b sdk.Backend, s sdk.Sink) error {
+	a.started = b.Name()
+	return a.Adapter.Start(ctx, b, s)
+}
+
+type namedBackend struct {
+	name string
+	ok   bool
+}
+
+func (b namedBackend) Name() string { return b.name }
+func (b namedBackend) Probe(context.Context) sdk.Availability {
+	return sdk.Availability{Available: b.ok, Detail: "test"}
+}
+
+func TestBackendOverride(t *testing.T) {
+	a := &twoBackendAdapter{Adapter: sim.New()}
+	rt := New(Config{BackendOverride: map[string]string{"dual": "native"}})
+	if err := rt.Register(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if a.started != "native" || rt.Backend("dual") != "native" {
+		t.Fatalf("override ignored: started=%q recorded=%q (A5 逃生口失效)", a.started, rt.Backend("dual"))
+	}
+
+	rt2 := New(Config{BackendOverride: map[string]string{"dual": "ghost"}})
+	_ = rt2.Register(&twoBackendAdapter{Adapter: sim.New()})
+	if err := rt2.Start(context.Background()); err == nil {
+		t.Fatal("unknown forced backend must fail startup loudly")
+	}
+}
+
+func TestStopPropagates(t *testing.T) {
+	rt := startedRuntime(t)
+	if err := rt.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
