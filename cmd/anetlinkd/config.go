@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/ANetResearch/ANetLink/adapters/modbus"
+	"github.com/ANetResearch/ANetLink/adapters/mqttbridge"
 	"github.com/ANetResearch/ANetLink/runtime"
 )
 
@@ -15,6 +16,8 @@ type fileConfig struct {
 	BackendOverride map[string]string `json:"backend_override,omitempty"`
 	// Modbus configures the modbus adapter; absent = adapter not registered.
 	Modbus *modbus.Config `json:"modbus,omitempty"`
+	// Mqtt configures the zigbee2mqtt/Tasmota bridge; absent = not registered.
+	Mqtt *mqttbridge.Config `json:"mqtt,omitempty"`
 	// Sim keeps the simulator lamp registered (default true, so a bare
 	// anetlinkd always has something to show).
 	Sim *bool `json:"sim,omitempty"`

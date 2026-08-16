@@ -15,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ANetResearch/ANetLink/adapters/modbus"
+	"github.com/ANetResearch/ANetLink/adapters/mqttbridge"
 	"github.com/ANetResearch/ANetLink/adapters/sim"
 	"github.com/ANetResearch/ANetLink/northbound/c1serv"
 	"github.com/ANetResearch/ANetLink/northbound/mcpserv"
@@ -42,6 +43,11 @@ func main() {
 	}
 	if cfg.Modbus != nil {
 		if err := rt.Register(modbus.New(*cfg.Modbus)); err != nil {
+			log.Fatalf("anetlinkd: %v", err)
+		}
+	}
+	if cfg.Mqtt != nil {
+		if err := rt.Register(mqttbridge.New(*cfg.Mqtt)); err != nil {
 			log.Fatalf("anetlinkd: %v", err)
 		}
 	}
