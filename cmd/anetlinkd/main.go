@@ -12,12 +12,18 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/ANetResearch/ANetLink/adapters/sim"
+	"github.com/ANetResearch/ANetLink/northbound/mcpserv"
 	"github.com/ANetResearch/ANetLink/runtime"
 )
 
+const version = "0.1.0"
+
 func main() {
 	demo := flag.Bool("demo", false, "run one demo invocation and exit")
+	serveMCP := flag.Bool("mcp", false, "serve the MCP northbound on stdio (for Claude Code / IDE clients)")
 	flag.Parse()
 
 	rt := runtime.New(runtime.Config{})
@@ -34,6 +40,14 @@ func main() {
 		cid, _ := d.Profile.CID()
 		log.Printf("device %s/%s online=%v trust=T%d profile=%s",
 			d.Profile.Protocol, d.ID, d.Online, d.Profile.MaxTrust, cid)
+	}
+
+	if *serveMCP {
+		// stdio belongs to the MCP session; logs already go to stderr.
+		if err := mcpserv.New(rt, version).Run(ctx, &mcp.StdioTransport{}); err != nil {
+			log.Fatalf("anetlinkd: mcp: %v", err)
+		}
+		return
 	}
 
 	if *demo {
