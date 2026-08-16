@@ -28,6 +28,11 @@ services:
     tty: true
     ports: ["8997-9000:8997-9000"]
     restart: unless-stopped
+  opcua:
+    image: mcr.microsoft.com/iotedge/opc-plc:latest
+    command: ["--pn=50000", "--autoaccept", "--unsecuretransport"]
+    network_mode: host   # binds opc.tcp on :50000
+    restart: unless-stopped
   matter:
     image: node:22-slim
     network_mode: host   # Matter 要 UDP 5540 + mDNS
