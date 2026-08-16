@@ -1,0 +1,39 @@
+# ANetLink 试验场（IoT device simulation field）— lab-node 常驻实例见 /data/testbed
+#
+# 成员皆为真实协议实现的软件形态（L1.5：真栈、无射频）：
+#   ha        真 Home Assistant core（demo 集成 = 真实可控实体）  :18123
+#   mosq      真 mosquitto broker                                :18830
+#   modbus    真第三方 Python Modbus/TCP 服务端                   :15020
+#   otns      OpenThread 网络模拟器（真 OT 栈离散事件仿真）        :8997-9000
+#   matter    matter.js 虚拟灯 — 真 Matter 协议栈、LAN 可配对（host 网络, UDP 5540）
+#
+# Zigbee 无纯软件网络模拟（协调器硬件必需）——由 mqtt 层模拟覆盖，真棒到位后转 L2。
+services:
+  ha:
+    image: homeassistant/home-assistant:stable
+    ports: ["18123:8123"]
+    volumes: ["./ha-config:/config"]
+    restart: unless-stopped
+  mosq:
+    image: eclipse-mosquitto:2
+    command: mosquitto -c /mosquitto-no-auth.conf
+    ports: ["18830:1883"]
+    restart: unless-stopped
+  modbus:
+    image: oitc/modbus-server
+    ports: ["15020:5020"]
+    restart: unless-stopped
+  otns:
+    image: openthread/otns-playground
+    tty: true
+    ports: ["8997-9000:8997-9000"]
+    restart: unless-stopped
+  matter:
+    image: node:22-slim
+    network_mode: host   # Matter 要 UDP 5540 + mDNS
+    command: bash -c "npm config set registry https://registry.npmmirror.com && npx -y -p @matter/examples matter-device --type light"
+    volumes: ["matter-storage:/root/.matter"]
+    restart: unless-stopped
+
+volumes:
+  matter-storage:
