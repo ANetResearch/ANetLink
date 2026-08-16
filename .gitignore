@@ -1,0 +1,10 @@
+# local research material — never part of the distributed repo
+/Docs/
+/DocsANetLink/
+/Refs/
+/Repos/
+
+/dist/
+*.test
+*.out
+.DS_Store
