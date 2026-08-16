@@ -1,5 +1,11 @@
 # ANetLink
 
+> **AgentNetwork connects intelligence. ANetLink connects the physical world.**
+>
+> ANetLink provides a protocol-independent, capability-oriented and
+> trust-aware link between heterogeneous physical devices and AgentNetwork —
+> ANet's **physical-world narrow waist** (AELP + TSIR-D). Positioning: K210.
+
 **The physical world, as ANet capabilities.** ANetLink models devices
 (DeviceProfile: capabilities × access mask × trust ladder), speaks the smart-
 home protocol zoo through pluggable adapters, and exposes exactly one
@@ -34,6 +40,7 @@ stacks land per the coverage matrix below.
 | Modbus ✅ | — (direct) | pure-Go client |
 | MQTT (zigbee2mqtt/Tasmota) ✅ | broker probe | bridge itself |
 | Home Assistant ✅ | HA WebSocket/REST | (native rows below) |
+| **OPC UA (industrial)** ✅ | — (direct) | pure-Go gopcua client |
 | Zigbee | running zigbee2mqtt | pure-Go serial coordinator stack |
 | BLE | BlueZ via D-Bus | pure-Go kernel HCI |
 | BT Mesh | bluetooth-meshd | pure-Go provisioning + models |

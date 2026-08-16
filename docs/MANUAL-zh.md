@@ -228,7 +228,28 @@ config 里 `"sim": {"enabled": false}` 显式关闭。信任 T4（进程内闭�
   （对已开的灯再 turn_on 无事件）回退到活读状态兜底——读到目标态=VERIFIED、
   相反态=FAILED、读不到=UNVERIFIED。
 
-### 6.5 原生栈（在建）
+### 6.5 opcua（OPC UA，工业）
+纯 Go 客户端（gopcua）。ANetLink 跨入工业自动化的入口。
+
+- OPC UA Variable → property，Method → action（R02 §4 映射）。
+- **诚实模型 = T2**：写后读回，读回值即 metric；相悖 → FAILED，不可达 → UNAVAILABLE。
+- 静态配置节点映射：`node_id`（如 `ns=2;s=Temperature`）、`access`。
+- 调用：SET 用 `args.value`；GET 无参。
+
+配置示例：
+```json
+"opcua": {
+  "devices": [{
+    "id": "plc-1", "endpoint": "opc.tcp://192.168.1.10:4840",
+    "nodes": [
+      { "id": "sensor.temperature", "node_id": "ns=2;s=Temp", "access": 4, "unit": "°C" },
+      { "id": "climate.setpoint",   "node_id": "ns=2;s=SP",   "access": 6, "unit": "°C" }
+    ]
+  }]
+}
+```
+
+### 6.6 原生栈（在建）
 - **Matter**（纯 Go，长线）：已实现 TLV 编解码、mDNS 可配对发现、SPAKE2+、PASE 握手、
   消息帧层；剩 UDP exchange 环（MRP）+ commissioning 全流程后可真机配对。
 - **Zigbee 原生 / BLE / 蓝牙 Mesh / Thread**：路线见 K207 §6 覆盖矩阵。Zigbee 无纯软件
