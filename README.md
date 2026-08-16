@@ -8,8 +8,9 @@ capability surface northbound — to Claude/IDEs via MCP, and to the
 contract. It is useful with zero network: one machine, one adapter, and your
 devices become callable.
 
-Status: **v0 skeleton** — contracts, runtime, trust rules and the sim adapter
-are real and tested; protocol adapters land per the coverage matrix below.
+Status: **v0.2** — contracts, runtime, trust rules, MCP + C1 northbound and
+three adapters (modbus / mqtt-bridge / ha-bridge) are real and tested; native
+stacks land per the coverage matrix below.
 
 ## Doctrine (K207 A3/A3′/A5)
 
@@ -30,9 +31,9 @@ are real and tested; protocol adapters land per the coverage matrix below.
 
 | Protocol | Probe backend | Self-contained fallback |
 |---|---|---|
-| Modbus | — (direct) | pure-Go client |
-| MQTT (zigbee2mqtt/Tasmota) | broker probe | bridge itself |
-| Home Assistant | HA WebSocket/REST | (native rows below) |
+| Modbus ✅ | — (direct) | pure-Go client |
+| MQTT (zigbee2mqtt/Tasmota) ✅ | broker probe | bridge itself |
+| Home Assistant ✅ | HA WebSocket/REST | (native rows below) |
 | Zigbee | running zigbee2mqtt | pure-Go serial coordinator stack |
 | BLE | BlueZ via D-Bus | pure-Go kernel HCI |
 | BT Mesh | bluetooth-meshd | pure-Go provisioning + models |

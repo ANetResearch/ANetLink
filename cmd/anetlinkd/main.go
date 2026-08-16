@@ -14,6 +14,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/ANetResearch/ANetLink/adapters/habridge"
 	"github.com/ANetResearch/ANetLink/adapters/modbus"
 	"github.com/ANetResearch/ANetLink/adapters/mqttbridge"
 	"github.com/ANetResearch/ANetLink/adapters/sim"
@@ -48,6 +49,11 @@ func main() {
 	}
 	if cfg.Mqtt != nil {
 		if err := rt.Register(mqttbridge.New(*cfg.Mqtt)); err != nil {
+			log.Fatalf("anetlinkd: %v", err)
+		}
+	}
+	if cfg.HomeAssistant != nil {
+		if err := rt.Register(habridge.New(*cfg.HomeAssistant)); err != nil {
 			log.Fatalf("anetlinkd: %v", err)
 		}
 	}

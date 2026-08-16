@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ANetResearch/ANetLink/adapters/habridge"
 	"github.com/ANetResearch/ANetLink/adapters/modbus"
 	"github.com/ANetResearch/ANetLink/adapters/mqttbridge"
 	"github.com/ANetResearch/ANetLink/runtime"
@@ -18,6 +19,8 @@ type fileConfig struct {
 	Modbus *modbus.Config `json:"modbus,omitempty"`
 	// Mqtt configures the zigbee2mqtt/Tasmota bridge; absent = not registered.
 	Mqtt *mqttbridge.Config `json:"mqtt,omitempty"`
+	// HomeAssistant configures the HA bridge; absent = not registered.
+	HomeAssistant *habridge.Config `json:"homeassistant,omitempty"`
 	// Sim keeps the simulator lamp registered (default true, so a bare
 	// anetlinkd always has something to show).
 	Sim *bool `json:"sim,omitempty"`
