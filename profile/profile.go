@@ -34,7 +34,11 @@ type DeviceProfile struct {
 	Model    string
 	Protocol string // "zigbee" | "matter" | "modbus" | "sim" | ...
 	Caps     []Capability
-	MaxTrust Trust // ceiling for this device+transport (link-minimum rule)
+	MaxTrust VerifyTrust // effect-verification ceiling (link-minimum rule)
+	// AuthTrust is the identity-authentication level (K210 D49). Zero value
+	// A0 (unknown) is the honest default for protocols without device
+	// identity (Modbus, MQTT); adapters that authenticate set it explicitly.
+	AuthTrust AuthTrust
 }
 
 // Canonical returns the CoreDet-CBOR preimage of the profile
@@ -63,6 +67,9 @@ func (p *DeviceProfile) Canonical() ([]byte, error) {
 	}
 	if len(caps) > 0 {
 		obj[5] = caps
+	}
+	if p.AuthTrust != A0 {
+		obj[7] = uint64(p.AuthTrust) // auth axis; absent ≡ A0 (C-D1)
 	}
 	return coredet.Marshal(obj)
 }

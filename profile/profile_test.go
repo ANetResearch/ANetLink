@@ -47,6 +47,47 @@ func TestSchemaRequired(t *testing.T) {
 	}
 }
 
+func TestDualAxisTrust(t *testing.T) {
+	// the two axes are independent and both survive the canonical encoding
+	p := &DeviceProfile{Schema: 1, Protocol: "modbus", MaxTrust: V2, AuthTrust: A1,
+		Caps: []Capability{{ID: "switch.onoff", Access: AccessSet}}}
+	a, err := p.CID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// changing only the auth axis must change the CID (it is CID-significant)
+	p2 := &DeviceProfile{Schema: 1, Protocol: "modbus", MaxTrust: V2, AuthTrust: A3,
+		Caps: []Capability{{ID: "switch.onoff", Access: AccessSet}}}
+	b, _ := p2.CID()
+	if a == b {
+		t.Fatal("auth_trust must be CID-significant (distinct auth → distinct CID)")
+	}
+	// A0 is omitted (absent ≡ A0, C-D1): a profile with A0 encodes shorter
+	p0 := &DeviceProfile{Schema: 1, Protocol: "modbus", MaxTrust: V2,
+		Caps: []Capability{{ID: "switch.onoff", Access: AccessSet}}}
+	e0, _ := p0.Canonical()
+	e1, _ := p.Canonical()
+	if len(e0) >= len(e1) {
+		t.Fatal("A0 auth_trust must be omitted from the encoding")
+	}
+}
+
+func TestLegacyAliases(t *testing.T) {
+	// T0–T4 must remain usable and identical to V0–V4
+	if T0 != V0 || T2 != V2 || T4 != V4 {
+		t.Fatal("legacy Trust aliases drifted from VerifyTrust")
+	}
+}
+
+func TestClampAuth(t *testing.T) {
+	if ClampAuth(A4, A1) != A1 {
+		t.Fatal("auth ceiling must win")
+	}
+	if ClampAuth(A1, A4) != A1 {
+		t.Fatal("declared auth below ceiling must survive")
+	}
+}
+
 func TestClamp(t *testing.T) {
 	if Clamp(T4, T1) != T1 {
 		t.Fatal("ceiling must win")

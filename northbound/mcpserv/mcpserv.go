@@ -18,7 +18,8 @@ type DeviceView struct {
 	Key          string   `json:"key" jsonschema:"runtime device key, adapter/deviceID"`
 	Protocol     string   `json:"protocol"`
 	Online       bool     `json:"online"`
-	Trust        uint8    `json:"trust" jsonschema:"trust ladder level 0-4"`
+	Trust        uint8    `json:"trust" jsonschema:"effect-verification trust 0-4 (can I verify it happened)"`
+	AuthTrust    uint8    `json:"auth_trust" jsonschema:"identity-authentication trust 0-4 (do I know who it is)"`
 	Capabilities []string `json:"capabilities"`
 	ProfileCID   string   `json:"profile_cid,omitempty"`
 }
@@ -60,6 +61,7 @@ func New(rt *runtime.Runtime, version string) *mcp.Server {
 				Protocol:     d.Profile.Protocol,
 				Online:       d.Online,
 				Trust:        uint8(d.Profile.MaxTrust),
+				AuthTrust:    uint8(d.Profile.AuthTrust),
 				Capabilities: caps,
 				ProfileCID:   cid,
 			})

@@ -102,7 +102,7 @@ func (a *Adapter) Start(ctx context.Context, _ sdk.Backend, sink sdk.Sink) error
 			Profile: &profile.DeviceProfile{
 				Schema: 1, Vendor: d.Vendor, Model: d.Model, Protocol: "modbus",
 				Caps:     caps,
-				MaxTrust: profile.T2, // readback over a local link
+				MaxTrust: profile.V2, AuthTrust: profile.A1, // readback over a local link; gateway-attested only (no device identity)
 			},
 			Online: online,
 		})

@@ -189,7 +189,7 @@ func (a *Adapter) onDevices(_ paho.Client, m paho.Message) {
 				Profile: &profile.DeviceProfile{
 					Schema: 1, Vendor: d.Definition.Vendor, Model: d.Definition.Model,
 					Protocol: "mqtt", Caps: caps,
-					MaxTrust: profile.T2, // state readback over the local broker
+					MaxTrust: profile.V2, AuthTrust: profile.A1, // state readback; broker-attested (no per-device key)
 				},
 				Online: true,
 			})

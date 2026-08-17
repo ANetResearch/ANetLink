@@ -189,7 +189,7 @@ func (a *Adapter) exposeEntity(e haEntity) {
 			Profile: &profile.DeviceProfile{
 				Schema: 1, Vendor: vendor, Model: e.EntityID, Protocol: "homeassistant",
 				Caps:     []profile.Capability{cap_},
-				MaxTrust: profile.T2, // state readback via HA's event bus
+				MaxTrust: profile.V2, AuthTrust: profile.A1, // state readback via HA event bus; HA-attested
 			},
 			Online: !strings.EqualFold(e.State, "unavailable"),
 		})

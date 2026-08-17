@@ -115,7 +115,7 @@ func (a *Adapter) Start(ctx context.Context, _ sdk.Backend, sink sdk.Sink) error
 			Profile: &profile.DeviceProfile{
 				Schema: 1, Vendor: d.Vendor, Model: d.Model, Protocol: "opcua",
 				Caps:     caps,
-				MaxTrust: profile.T2, // server value readback over the session
+				MaxTrust: profile.V2, AuthTrust: profile.A2, // value readback + protocol-authenticated session
 			},
 			Online: online,
 		})

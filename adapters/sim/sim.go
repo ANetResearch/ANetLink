@@ -45,7 +45,7 @@ func (a *Adapter) Start(_ context.Context, _ sdk.Backend, sink sdk.Sink) error {
 			Caps: []profile.Capability{
 				{ID: "light.onoff", Access: profile.AccessSet | profile.AccessGet | profile.AccessState},
 			},
-			MaxTrust: profile.T4, // in-process: physically closed loop by construction
+			MaxTrust: profile.V4, AuthTrust: profile.A4, // in-process: closed loop + rooted by construction
 		},
 		Online: true,
 	})
