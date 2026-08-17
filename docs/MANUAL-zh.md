@@ -87,6 +87,15 @@ zigbee2mqtt 读它的 retained 设备表。**没有设备配置项时，Zigbee �
 
 在 Claude 里也可以直接问——MCP 工具 `devices_discover` 返回发现结果与可粘贴的配置片段。
 
+**买了新设备要配对**（Zigbee 等支持入网的协议）：
+
+```bash
+./anetlinkd --config config.json --pair 60s   # 开放入网 60 秒，报告谁加入了
+```
+
+或在 Claude 里说"我刚买了个传感器"——MCP 工具 `devices_pair` 会开窗口、等设备加入、
+自动问出它的端点与集群，并给出可用配置。窗口结束后网络自动关闭（Zigbee 上限 254 秒）。
+
 ---
 
 ## 3. 核心概念
@@ -292,7 +301,9 @@ config 里 `"sim": {"enabled": false}` 显式关闭。信任 T4（进程内闭�
 - 需要 `CAP_NET_RAW` 与蓝牙控制器；没有时探测如实报告不可用。
 
 ### 6.9 matter（Matter over IP，纯 Go）
-六砖已就位：TLV 编解码 · mDNS 可配对发现 · SPAKE2+ · PASE 握手 · 消息帧 · UDP exchange。
+七砖已就位：TLV 编解码 · mDNS 可配对发现 · SPAKE2+ · PASE 握手 · 消息帧 · UDP exchange ·
+**加密会话**（HKDF 派生双向密钥 + 证明质询；AES-CCM 加密,消息头作为 AAD 认证;
+CCM 对 NIST SP 800-38C 两组官方向量钉死）。
 **PASE 已对真实 Matter 设备验证通过**（与 matter.js 虚拟灯完成完整握手、双方导出同一
 会话密钥）；SPAKE2+ 同时对 RFC 9383 与 connectedhomeip 官方向量钉死。
 后续：加密会话 + commissioning 全流程（arm-failsafe/CSR/AddNOC）→ 集群交互。
