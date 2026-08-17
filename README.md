@@ -43,7 +43,7 @@ stacks land per the coverage matrix below.
 | **OPC UA (industrial)** ✅ | — (direct) | pure-Go gopcua client |
 | **BACnet/IP (building)** ✅ | — (direct) | pure-Go ASHRAE 135 codec |
 | **CAN (vehicle/industrial)** ✅ | SocketCAN probe | pure-Go signal codec |
-| Zigbee | running zigbee2mqtt | pure-Go serial coordinator stack |
+| Zigbee ✅ | running zigbee2mqtt (MQTT bridge) | pure-Go Z-Stack serial coordinator |
 | BLE ✅ | — | pure-Go kernel HCI socket (no BlueZ, no cgo) |
 | BT Mesh | bluetooth-meshd | pure-Go provisioning + models |
 | Matter (IP) 🔶 | existing controller/HA | pure-Go stack — **PASE verified against a real device**; commissioning flow next |
