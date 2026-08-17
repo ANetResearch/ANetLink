@@ -69,7 +69,23 @@ CGO_ENABLED=0 go build -o anetlinkd ./cmd/anetlinkd
 在 Claude Code 里把它注册为 MCP server（`claude mcp add anetlink -- /path/to/anetlinkd --mcp`），
 然后就能让 Claude 调用 `devices_list` / `device_invoke` 控制设备。
 
-要接真实设备，写一个 `config.json`（见 §5），然后 `./anetlinkd --config config.json --mcp`。
+要接真实设备，**先让它自己找**：
+
+```bash
+# 扫描所有已编译适配器能触达的网络，打印发现的设备与建议配置
+./anetlinkd --scan
+
+# 直接写成配置文件（不会覆盖已存在的文件）
+./anetlinkd --scan --scan-out config.json
+./anetlinkd --config config.json --mcp
+```
+
+对已跑 Home Assistant 的用户，只需给出 URL + token，`--scan` 就会列出全部实体
+（实测：真实 HA 上一次扫出 31 个实体，带友好名、能力与信任级，无需手写任何设备）。
+Zigbee 协调器会走 ZDO 邻居表自动枚举节点及其集群；BACnet 用 Who-Is 广播；
+zigbee2mqtt 读它的 retained 设备表。**没有设备配置项时，Zigbee 适配器直接问网络。**
+
+在 Claude 里也可以直接问——MCP 工具 `devices_discover` 返回发现结果与可粘贴的配置片段。
 
 ---
 
