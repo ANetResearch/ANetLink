@@ -96,3 +96,42 @@ func TestClamp(t *testing.T) {
 		t.Fatal("declared below ceiling must survive")
 	}
 }
+
+// TestEndpointLayer pins D50: multi-facet devices model endpoints, and both
+// lookup and the canonical encoding account for them.
+func TestEndpointLayer(t *testing.T) {
+	p := &DeviceProfile{
+		Schema: 1, Protocol: "matter", MaxTrust: V2, AuthTrust: A3,
+		Endpoints: []Endpoint{
+			{ID: "1", Name: "outlet-a", Caps: []Capability{{ID: "switch.onoff", Access: AccessSet | AccessGet}}},
+			{ID: "2", Name: "outlet-b", Caps: []Capability{{ID: "switch.onoff", Access: AccessSet | AccessGet}}},
+			{ID: "3", Name: "meter", Caps: []Capability{{ID: "sensor.power", Access: AccessGet, Unit: "W"}}},
+		},
+	}
+	if len(p.AllCaps()) != 3 {
+		t.Fatalf("AllCaps flattening wrong: %d", len(p.AllCaps()))
+	}
+	if _, ok := p.Find("sensor.power"); !ok {
+		t.Fatal("Find must search endpoints")
+	}
+	ep, ok := p.Endpoint("2")
+	if !ok || ep.Name != "outlet-b" {
+		t.Fatalf("Endpoint lookup: %+v %v", ep, ok)
+	}
+	// endpoints are CID-significant
+	cid1, err := p.CID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Endpoints[2].Caps[0].Unit = "kW"
+	cid2, _ := p.CID()
+	if cid1 == cid2 {
+		t.Fatal("endpoint contents must be CID-significant")
+	}
+	// single-endpoint devices are unaffected
+	flat := &DeviceProfile{Schema: 1, Protocol: "modbus", MaxTrust: V2,
+		Caps: []Capability{{ID: "switch.onoff", Access: AccessSet}}}
+	if len(flat.AllCaps()) != 1 {
+		t.Fatal("flat profile broke")
+	}
+}

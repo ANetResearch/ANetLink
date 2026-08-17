@@ -63,8 +63,9 @@ func New(rt *runtime.Runtime, version string) *mcp.Server {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listOut, error) {
 		var out listOut
 		for _, d := range rt.Devices() {
-			caps := make([]string, 0, len(d.Profile.Caps))
-			for _, c := range d.Profile.Caps {
+			all := d.Profile.AllCaps() // includes endpoint capabilities (D50)
+			caps := make([]string, 0, len(all))
+			for _, c := range all {
 				caps = append(caps, c.ID)
 			}
 			cid, _ := d.Profile.CID()

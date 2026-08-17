@@ -95,7 +95,7 @@ func Handler(rt *runtime.Runtime) http.Handler {
 		var caps []string
 		for _, d := range rt.Devices() {
 			key := runtime.DeviceKey{Adapter: d.Profile.Protocol, Device: d.ID}
-			for _, c := range d.Profile.Caps {
+			for _, c := range d.Profile.AllCaps() { // endpoints included (D50)
 				caps = append(caps, CapabilityID(c.ID, key))
 			}
 		}

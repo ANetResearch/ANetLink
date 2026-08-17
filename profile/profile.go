@@ -25,6 +25,26 @@ type Capability struct {
 	Unit   string // optional measurement unit
 }
 
+// Endpoint is one addressable facet of a device (R02 §3 / K210 D50): a
+// 4-gang power strip has four, a thermostat may expose climate + humidity,
+// a Matter node has one endpoint per device type. Single-endpoint devices
+// need not use this — Caps on the DeviceProfile remain the flat shorthand.
+type Endpoint struct {
+	ID   string       // endpoint id, e.g. "1" or "hvac.main"
+	Name string       // optional human label
+	Caps []Capability // capabilities on this endpoint (order significant)
+}
+
+// Find returns the capability entry for id on this endpoint.
+func (e *Endpoint) Find(id string) (Capability, bool) {
+	for _, c := range e.Caps {
+		if c.ID == id {
+			return c, true
+		}
+	}
+	return Capability{}, false
+}
+
 // DeviceProfile describes one device model. Field order in the canonical
 // encoding is fixed by integer keys; caps array order is author-significant
 // (CoreDet C-D3).
@@ -39,6 +59,30 @@ type DeviceProfile struct {
 	// A0 (unknown) is the honest default for protocols without device
 	// identity (Modbus, MQTT); adapters that authenticate set it explicitly.
 	AuthTrust AuthTrust
+	// Endpoints models multi-facet devices (D50). Empty for single-endpoint
+	// devices, which use Caps directly.
+	Endpoints []Endpoint
+}
+
+// AllCaps returns every capability the device exposes, flattening endpoints
+// (device-level Caps first, then each endpoint's in order). Callers that do
+// not care about endpoint structure use this.
+func (p *DeviceProfile) AllCaps() []Capability {
+	out := append([]Capability(nil), p.Caps...)
+	for _, e := range p.Endpoints {
+		out = append(out, e.Caps...)
+	}
+	return out
+}
+
+// Endpoint returns the endpoint with the given id.
+func (p *DeviceProfile) Endpoint(id string) (*Endpoint, bool) {
+	for i := range p.Endpoints {
+		if p.Endpoints[i].ID == id {
+			return &p.Endpoints[i], true
+		}
+	}
+	return nil, false
 }
 
 // Canonical returns the CoreDet-CBOR preimage of the profile
@@ -71,6 +115,28 @@ func (p *DeviceProfile) Canonical() ([]byte, error) {
 	if p.AuthTrust != A0 {
 		obj[7] = uint64(p.AuthTrust) // auth axis; absent ≡ A0 (C-D1)
 	}
+	if len(p.Endpoints) > 0 {
+		eps := make([]any, 0, len(p.Endpoints))
+		for _, e := range p.Endpoints {
+			ecaps := make([]any, 0, len(e.Caps))
+			for _, c := range e.Caps {
+				m := map[uint64]any{1: c.ID, 2: uint64(c.Access)}
+				if c.Unit != "" {
+					m[3] = c.Unit
+				}
+				ecaps = append(ecaps, m)
+			}
+			em := map[uint64]any{1: e.ID}
+			if e.Name != "" {
+				em[2] = e.Name
+			}
+			if len(ecaps) > 0 {
+				em[3] = ecaps
+			}
+			eps = append(eps, em)
+		}
+		obj[8] = eps
+	}
 	return coredet.Marshal(obj)
 }
 
@@ -83,10 +149,16 @@ func (p *DeviceProfile) CID() (string, error) {
 	return anetcid.Sum(pre)
 }
 
-// Find returns the capability entry for id, if declared.
+// Find returns the capability entry for id, searching device-level caps
+// first and then every endpoint.
 func (p *DeviceProfile) Find(id string) (Capability, bool) {
 	for _, c := range p.Caps {
 		if c.ID == id {
+			return c, true
+		}
+	}
+	for i := range p.Endpoints {
+		if c, ok := p.Endpoints[i].Find(id); ok {
 			return c, true
 		}
 	}
