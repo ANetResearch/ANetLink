@@ -22,8 +22,21 @@ import (
 	"github.com/ANetResearch/ANetLink/matter/tlv"
 )
 
-// Matter's fixed PAKE context string (Core Spec §4.13.1.2).
-var pakeContext = []byte("CHIP PAKE V1 Commissioning")
+// Matter's PAKE context prefix (Core Spec §3.10). The actual SPAKE2+ context
+// is Crypto_Hash(prefix ‖ PBKDFParamRequest ‖ PBKDFParamResponse) — binding
+// the handshake to the exact messages exchanged, not just a fixed string.
+var pakeContextPrefix = []byte("CHIP PAKE V1 Commissioning")
+
+func matterContext(reqBytes, respBytes []byte) []byte {
+	// Matter §3.10: the SPAKE2+ context is the RAW concatenation of the
+	// prefix and the exact request+response payloads — NOT hashed. RFC 9383
+	// then length-prefixes this whole context inside the transcript.
+	ctx := make([]byte, 0, len(pakeContextPrefix)+len(reqBytes)+len(respBytes))
+	ctx = append(ctx, pakeContextPrefix...)
+	ctx = append(ctx, reqBytes...)
+	ctx = append(ctx, respBytes...)
+	return ctx
+}
 
 // PBKDFParamRequest is the commissioner's opening message.
 type PBKDFParamRequest struct {
@@ -96,6 +109,21 @@ func DecodePBKDFParamResponse(b []byte) (*PBKDFParamResponse, error) {
 					out.Iterations = uint32(pe.U)
 				case 2:
 					out.Salt = pe.P
+				default:
+					if isContainer(pe) {
+						if err := r.SkipContainer(); err != nil {
+							return nil, err
+						}
+					}
+				}
+			}
+		default:
+			// Unknown top-level field (e.g. ctx=5 SessionParameters that a
+			// real device sends): skip its whole subtree if it is a container,
+			// so its children do not leak into this loop.
+			if isContainer(e) {
+				if err := r.SkipContainer(); err != nil {
+					return nil, err
 				}
 			}
 		}
@@ -144,6 +172,12 @@ func DecodePake2(b []byte) (*Pake2, error) {
 			out.PB = e.P
 		case 2:
 			out.CB = e.P
+		default:
+			if isContainer(e) {
+				if err := r.SkipContainer(); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	if len(out.PB) == 0 || len(out.CB) == 0 {
@@ -165,6 +199,10 @@ func (p *Pake3) Encode() ([]byte, error) {
 	return w.Bytes()
 }
 
+func isContainer(e *tlv.Element) bool {
+	return e.Type == tlv.TypeStruct || e.Type == tlv.TypeArray || e.Type == tlv.TypeList
+}
+
 func expect(r *tlv.Reader, want tlv.Type) error {
 	e, err := r.Next()
 	if err != nil {
@@ -179,12 +217,13 @@ func expect(r *tlv.Reader, want tlv.Type) error {
 // Commissioner is the client-side PASE state machine. It holds the passcode
 // and the SPAKE2+ prover across the message round-trips.
 type Commissioner struct {
-	passcode uint16 // note: real passcode is uint32; see Session for the full value
 	pass     uint32
 	prover   *spake2p.Prover
 	pa       []byte
 	confirm  *spake2p.Confirmation
 	req      *PBKDFParamRequest
+	reqBytes []byte // exact PBKDFParamRequest payload (for the context hash)
+	pakeCtx  []byte // Crypto_Hash(prefix ‖ request ‖ response)
 }
 
 // NewCommissioner starts a PASE run for a setup passcode.
@@ -200,13 +239,16 @@ func (c *Commissioner) StartRequest(sessionID uint16) (*PBKDFParamRequest, []byt
 	}
 	c.req = &PBKDFParamRequest{InitiatorRandom: ir, InitiatorSession: sessionID, PasscodeID: 0}
 	b, err := c.req.Encode()
+	c.reqBytes = b
 	return c.req, b, err
 }
 
 // MakePake1 consumes the device's PBKDFParamResponse and produces Pake1
-// (step 2): derive w0/w1 from the passcode and the device's salt/iterations,
-// then compute the SPAKE2+ share pA.
-func (c *Commissioner) MakePake1(resp *PBKDFParamResponse) (*Pake1, []byte, error) {
+// (step 2): compute the SPAKE2+ context from the exact request+response
+// bytes, derive w0/w1 from the passcode and the device's salt/iterations,
+// then compute the SPAKE2+ share pA. respBytes is the raw received payload.
+func (c *Commissioner) MakePake1(resp *PBKDFParamResponse, respBytes []byte) (*Pake1, []byte, error) {
+	c.pakeCtx = matterContext(c.reqBytes, respBytes)
 	w0, w1 := spake2p.ComputeW0W1(c.pass, resp.Salt, int(resp.Iterations))
 	x := make([]byte, 32)
 	if _, err := rand.Read(x); err != nil {
@@ -227,7 +269,7 @@ func (c *Commissioner) MakePake3(p2 *Pake2) (*Pake3, []byte, []byte, error) {
 	if c.prover == nil {
 		return nil, nil, nil, errors.New("pase: Pake1 not sent")
 	}
-	conf, err := c.prover.Finish(pakeContext, nil, nil, p2.PB)
+	conf, err := c.prover.Finish(c.pakeCtx, nil, nil, p2.PB)
 	if err != nil {
 		return nil, nil, nil, err
 	}

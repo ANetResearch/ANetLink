@@ -404,3 +404,28 @@ func readInt(p []byte) int64 {
 	shift := 64 - 8*len(p)
 	return int64(u<<shift) >> shift
 }
+
+// SkipContainer consumes the children of the container element that Next()
+// just returned, up to and including its matching end-of-container. Call it
+// after Next() returns a Struct/Array/List you do not want to descend into —
+// essential for forward compatibility: a decoder MUST skip unknown container
+// fields rather than let their children leak into the parent scope.
+func (r *Reader) SkipContainer() error {
+	depth := 1
+	for depth > 0 {
+		e, err := r.Next()
+		if err != nil {
+			return err
+		}
+		if e == nil {
+			return ErrContainer
+		}
+		switch e.Type {
+		case TypeStruct, TypeArray, TypeList:
+			depth++
+		case TypeEnd:
+			depth--
+		}
+	}
+	return nil
+}

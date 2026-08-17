@@ -60,14 +60,14 @@ type Message struct {
 	SessionID      uint16
 	MessageCounter uint32
 	// Protocol header:
-	ExchangeID   uint16
-	ProtocolID   uint16
-	Opcode       uint8
-	Initiator    bool
-	Reliability  bool
-	Ack          bool
-	AckCounter   uint32 // valid when Ack
-	VendorID     uint16 // valid when non-zero and V flag set
+	ExchangeID  uint16
+	ProtocolID  uint16
+	Opcode      uint8
+	Initiator   bool
+	Reliability bool
+	Ack         bool
+	AckCounter  uint32 // valid when Ack
+	VendorID    uint16 // valid when non-zero and V flag set
 	// Application payload (e.g. the PASE TLV body).
 	Payload []byte
 }

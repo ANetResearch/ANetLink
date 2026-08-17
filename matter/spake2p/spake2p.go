@@ -148,8 +148,8 @@ func transcript(context, idA, idB, pA, pB, Z, V []byte, w0 *big.Int) []byte {
 	add(context)
 	add(idA)
 	add(idB)
-	add(mBytes)
-	add(nBytes)
+	add(elliptic.Marshal(curve, mx, my)) // uncompressed, consistent with pA/pB/Z/V
+	add(elliptic.Marshal(curve, nx, ny))
 	add(pA)
 	add(pB)
 	add(Z)
@@ -216,18 +216,22 @@ func (v *Verifier) Finish(context, idA, idB, pA []byte) (*Confirmation, error) {
 // key + shared key, HKDF-expand the confirmation key, HMAC the peer shares.
 func derive(context, idA, idB, pA, pB, Z, V []byte, w0 *big.Int) (*Confirmation, error) {
 	tt := transcript(context, idA, idB, pA, pB, Z, V, w0)
-	h := sha256.Sum256(tt)
-	ka, ke := h[:16], h[16:]
-	// KcA || KcB = HKDF(nil, Ka, "ConfirmationKeys", 32)
-	kc := make([]byte, 32)
-	r := hkdf.New(sha256.New, ka, nil, []byte("ConfirmationKeys"))
+	kmain := sha256.Sum256(tt)
+	ke := kmain[:16] // shared secret = first half of K_main
+	// KcA || KcB = HKDF(nil, K_main, "ConfirmationKeys", 64) — the FULL K_main
+	// is the KDF input (RFC 9383 §3.3), not just its second half. 32 bytes each.
+	kc := make([]byte, 64)
+	r := hkdf.New(sha256.New, kmain[:], nil, []byte("ConfirmationKeys"))
 	if _, err := r.Read(kc); err != nil {
 		return nil, err
 	}
-	kcA, kcB := kc[:16], kc[16:]
-	macA := hmac.New(sha256.New, kcA)
-	macA.Write(pB)
-	macB := hmac.New(sha256.New, kcB)
-	macB.Write(pA)
-	return &Confirmation{Ke: ke, CAtoB: macA.Sum(nil), CBtoA: macB.Sum(nil)}, nil
+	kcA, kcB := kc[:32], kc[32:]
+	// RFC 9383 §3.3 (pinned by the appendix vector):
+	//   confirmP (prover→verifier) = MAC(KcB, shareP=pA)
+	//   confirmV (verifier→prover) = MAC(KcA, shareV=pB)
+	macAtoB := hmac.New(sha256.New, kcB)
+	macAtoB.Write(pA)
+	macBtoA := hmac.New(sha256.New, kcA)
+	macBtoA.Write(pB)
+	return &Confirmation{Ke: ke, CAtoB: macAtoB.Sum(nil), CBtoA: macBtoA.Sum(nil)}, nil
 }

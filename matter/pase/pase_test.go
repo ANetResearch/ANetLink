@@ -15,10 +15,10 @@ import (
 type device struct {
 	salt     []byte
 	iters    uint32
-	w0       interface{ Bytes() []byte }
 	verifier *spake2p.Verifier
 	pb       []byte
 	conf     *spake2p.Confirmation
+	ctx      []byte // shared SPAKE2+ context (matches the commissioner)
 }
 
 func newDevice(t *testing.T, passcode uint32) *device {
@@ -49,7 +49,7 @@ func (d *device) paramResponse(req *PBKDFParamRequest) *PBKDFParamResponse {
 // pake2 consumes the commissioner's pA, computes pB + cB.
 func (d *device) pake2(t *testing.T, p1 *Pake1) *Pake2 {
 	t.Helper()
-	conf, err := d.verifier.Finish(pakeContext, nil, nil, p1.PA)
+	conf, err := d.verifier.Finish(d.ctx, nil, nil, p1.PA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,10 +89,11 @@ func TestFullHandshakeAgrees(t *testing.T) {
 		t.Fatal("PBKDFParamResponse did not round-trip")
 	}
 
-	p1, p1Bytes, err := com.MakePake1(decoded)
+	p1, p1Bytes, err := com.MakePake1(decoded, respBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
+	dev.ctx = matterContext(com.reqBytes, respBytes) // device shares the context
 	if _, err := decodePake1(p1Bytes); err != nil {
 		t.Fatalf("Pake1 encoding invalid: %v", err)
 	}
@@ -128,10 +129,12 @@ func TestWrongPasscodeRejectedAtPake2(t *testing.T) {
 
 	req, _, _ := com.StartRequest(1)
 	resp := dev.paramResponse(req)
-	p1, _, err := com.MakePake1(resp)
+	rb := encodeResp(t, resp)
+	p1, _, err := com.MakePake1(resp, rb)
 	if err != nil {
 		t.Fatal(err)
 	}
+	dev.ctx = matterContext(com.reqBytes, rb)
 	p2 := dev.pake2(t, p1)
 	if _, _, _, err := com.MakePake3(p2); err == nil {
 		t.Fatal("wrong passcode MUST be rejected at the cB check")

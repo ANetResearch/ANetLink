@@ -20,15 +20,15 @@ func TestPake1FrameLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []byte{
-		0x00,             // message flags: v0, no source, no dest
-		0x00, 0x00,       // session id 0
-		0x00,             // security flags
+		0x00,       // message flags: v0, no source, no dest
+		0x00, 0x00, // session id 0
+		0x00,                   // security flags
 		0x01, 0x00, 0x00, 0x00, // message counter 1
-		0x05,             // exchange flags: I|R (0x01|0x04)
-		0x22,             // opcode PASE Pake1
-		0x34, 0x12,       // exchange id 0x1234
-		0x00, 0x00,       // protocol id 0x0000 secure channel
-		0x15, 0x18,       // payload
+		0x05,       // exchange flags: I|R (0x01|0x04)
+		0x22,       // opcode PASE Pake1
+		0x34, 0x12, // exchange id 0x1234
+		0x00, 0x00, // protocol id 0x0000 secure channel
+		0x15, 0x18, // payload
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("frame bytes:\n got  %x\n want %x", got, want)
@@ -84,15 +84,15 @@ func TestSourceAndDestSkipped(t *testing.T) {
 	// A message that (illegally for v0 encode, but legal to decode) carries a
 	// source node id: DSIZ=0, S=1. We must skip the 8 source bytes.
 	b := []byte{
-		flagSourcePresent,      // S=1
-		0x00, 0x00,             // session 0
+		flagSourcePresent, // S=1
+		0x00, 0x00,        // session 0
 		0x00,                   // security
 		0x07, 0x00, 0x00, 0x00, // counter 7
 		1, 2, 3, 4, 5, 6, 7, 8, // source node id (skipped)
 		xInitiator, OpPBKDFParamRequest,
 		0x09, 0x00, // exchange 9
 		0x00, 0x00, // protocol id
-		0xAA,       // payload
+		0xAA, // payload
 	}
 	m, err := Decode(b)
 	if err != nil {
