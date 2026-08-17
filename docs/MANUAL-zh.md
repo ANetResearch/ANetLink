@@ -266,7 +266,22 @@ config 里 `"sim": {"enabled": false}` 显式关闭。信任 T4（进程内闭�
 - 需要 SocketCAN 接口（`ip link add dev vcan0 type vcan && ip link set vcan0 up`）；
   接口不存在时探测如实报告不可用。
 
-### 6.8 原生栈（在建）
+### 6.8 ble（Bluetooth LE）
+**纯 Go 直连内核 HCI socket——不需要 BlueZ、不需要 D-Bus、不需要 cgo**（A3′ 零 OS 假定）。
+
+- 扫描：原始 HCI 命令开关 LE scan，解码广播报文（地址/RSSI/名称/服务数据/厂商数据）。
+- 传感器映射：声明式规则从广播载荷取值（offset/length/signed/scale）。
+- **诚实模型 = V2/A0**：广播即观测值（V2），但**无设备身份**（A0）、**无 ack**；
+  写入被拒绝而不是假装成功（GATT 写是后续增量）。
+- 需要 `CAP_NET_RAW` 与蓝牙控制器；没有时探测如实报告不可用。
+
+### 6.9 matter（Matter over IP，纯 Go）
+六砖已就位：TLV 编解码 · mDNS 可配对发现 · SPAKE2+ · PASE 握手 · 消息帧 · UDP exchange。
+**PASE 已对真实 Matter 设备验证通过**（与 matter.js 虚拟灯完成完整握手、双方导出同一
+会话密钥）；SPAKE2+ 同时对 RFC 9383 与 connectedhomeip 官方向量钉死。
+后续：加密会话 + commissioning 全流程（arm-failsafe/CSR/AddNOC）→ 集群交互。
+
+### 6.10 其余原生栈（在建）
 - **Matter**（纯 Go，长线）：已实现 TLV 编解码、mDNS 可配对发现、SPAKE2+、PASE 握手、
   消息帧层；剩 UDP exchange 环（MRP）+ commissioning 全流程后可真机配对。
 - **Zigbee 原生 / BLE / 蓝牙 Mesh / Thread**：路线见 K207 §6 覆盖矩阵。Zigbee 无纯软件
