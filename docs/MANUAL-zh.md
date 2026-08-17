@@ -249,7 +249,24 @@ config 里 `"sim": {"enabled": false}` 显式关闭。信任 T4（进程内闭�
 }
 ```
 
-### 6.6 原生栈（在建）
+### 6.6 bacnet（BACnet/IP，楼宇自动化）
+纯 Go 手写 ASHRAE 135 编解码（BVLL/NPDU/APDU），不绑 C 库。
+
+- 对象映射：AnalogInput/Output/Value、BinaryInput/Output/Value 的 Present_Value。
+- **诚实模型 = V2/A1**：写后读回；BACnet/IP 无设备身份，故认证轴只到 A1（网络背书）。
+- 配置：`{"id","addr":"host:47808","objects":[{"id","type","instance","access","unit"}]}`
+  （type：0=AI 1=AO 2=AV 3=BI 4=BO 5=BV）。
+
+### 6.7 can（CAN 总线，车/工业）
+纯 Go over SocketCAN（go.einride.tech/can）。
+
+- 信号映射：帧内 little-endian 位段 + scale/offset → 能力。
+- **诚实模型**：读取解码值 = V2；**写入 = V1 UNVERIFIED**——传统 CAN 无应用层
+  ack、无设备身份（A0),适配器不得假装验证成功。
+- 需要 SocketCAN 接口（`ip link add dev vcan0 type vcan && ip link set vcan0 up`）；
+  接口不存在时探测如实报告不可用。
+
+### 6.8 原生栈（在建）
 - **Matter**（纯 Go，长线）：已实现 TLV 编解码、mDNS 可配对发现、SPAKE2+、PASE 握手、
   消息帧层；剩 UDP exchange 环（MRP）+ commissioning 全流程后可真机配对。
 - **Zigbee 原生 / BLE / 蓝牙 Mesh / Thread**：路线见 K207 §6 覆盖矩阵。Zigbee 无纯软件
@@ -293,9 +310,22 @@ daemon 侧配置（ANet 仓 config.json）：
 
 ---
 
-## 8. 信任模型 T0–T4
+## 8. 信任模型：双轴 T0–T4
 
-每次效果能被多强地验证，用信任阶梯表达：
+ANetLink 用**两条正交的轴**描述信任（K210 D49）：
+
+| 轴 | 问题 | 字段 |
+|---|---|---|
+| **VerifyTrust**（V0–V4） | 我多确信这次执行**真的发生了** | `MaxTrust` / evidence.verify_trust |
+| **AuthTrust**（A0–A4） | 我多确信这台设备**是谁** | `AuthTrust` / evidence.auth_trust |
+
+二者独立：Modbus PLC 读回强（V2）但身份弱（A1）；云 API 可能身份不错却只有 ack（V1）。
+认证轴：A0 未知 · A1 网关背书 · A2 协议认证会话 · A3 设备密钥 · A4 硬件根。
+
+各适配器的诚实标注：Modbus V2/A1 · OPC UA V2/A2 · HA/MQTT V2/A1 · BACnet V2/A1 ·
+CAN 读 V2 写 V1，A0 · sim V4/A4。
+
+### 效果验证轴（VerifyTrust）详解
 
 | 级 | 含义 | 典型 |
 |---|---|---|
