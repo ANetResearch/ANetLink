@@ -42,6 +42,7 @@ stacks land per the coverage matrix below.
 | Home Assistant ✅ | HA WebSocket/REST | (native rows below) |
 | **OPC UA (industrial)** ✅ | — (direct) | pure-Go gopcua client |
 | **BACnet/IP (building)** ✅ | — (direct) | pure-Go ASHRAE 135 codec |
+| **CAN (vehicle/industrial)** ✅ | SocketCAN probe | pure-Go signal codec |
 | Zigbee | running zigbee2mqtt | pure-Go serial coordinator stack |
 | BLE | BlueZ via D-Bus | pure-Go kernel HCI |
 | BT Mesh | bluetooth-meshd | pure-Go provisioning + models |
