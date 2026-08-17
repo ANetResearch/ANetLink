@@ -18,6 +18,13 @@ jobs:
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - name: vet
         run: go vet ./...
+      - name: vet the tag-guarded files too
+        # Code behind a build tag is invisible to a default vet, so a broken
+        # realworld or camera test would sit undetected until someone ran it.
+        run: |
+          go vet -tags realworld ./...
+          go vet -tags onvif,hikvision,dahua ./...
+          go vet -tags realworld,onvif,hikvision,dahua ./...
       - name: tests
         run: go test ./...
       - name: demo boots
@@ -39,6 +46,28 @@ jobs:
       - name: teardown
         if: always()
         run: ./test/realworld/down.sh
+
+  # The opt-in adapters (K212 D57) are absent from every job above by design:
+  # they are not compiled into a default build. Without this job the camera
+  # and vendor adapters would never be built, vetted or tested in CI at all.
+  plugin:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        tags: ["onvif", "hikvision", "dahua", "onvif,hikvision,dahua"]
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: vet with ${{ matrix.tags }}
+        run: go vet -tags "${{ matrix.tags }}" ./...
+      - name: tests with ${{ matrix.tags }}
+        run: go test -tags "${{ matrix.tags }}" ./...
+      - name: boot with ${{ matrix.tags }}
+        run: go run -tags "${{ matrix.tags }}" ./cmd/anetlinkd --demo
 
   unplug:
     runs-on: ubuntu-latest
@@ -68,3 +97,7 @@ jobs:
         env:
           CGO_ENABLED: "1"   # -race needs cgo; runners ship gcc
         run: go test -race ./...
+      - name: race with the opt-in adapters
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race -tags onvif,hikvision,dahua ./...
