@@ -326,7 +326,11 @@ func (a *Adapter) Invoke(ctx context.Context, call sdk.Call) (effect.Effect, err
 			if strings.EqualFold(ns.State, "on") {
 				v = 1.0
 			}
-			b := sdk.NewEffect().Metric(metric, v)
+			b := sdk.NewEffect().Metric(metric, v).
+				Requested(fmt.Sprintf("%s=%v", capID, want)).
+				Protocol("homeassistant").NativeAck(true).
+				Observed(ns.State).
+				Trust(uint8(profile.V2), uint8(profile.A1))
 			if (v == 1.0) == want {
 				return b.Verified().Build(), nil
 			}

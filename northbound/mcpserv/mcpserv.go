@@ -39,6 +39,18 @@ type invokeOut struct {
 	Verifiable bool               `json:"verifiable"`
 	Metrics    map[string]float64 `json:"metrics,omitempty"`
 	Message    string             `json:"message,omitempty"`
+	Evidence   *evidenceOut       `json:"evidence,omitempty" jsonschema:"structured provenance of the execution"`
+}
+
+// evidenceOut is the tool-facing projection of effect.Evidence.
+type evidenceOut struct {
+	Requested     string `json:"requested,omitempty"`
+	Protocol      string `json:"protocol,omitempty"`
+	NativeAck     bool   `json:"native_ack,omitempty"`
+	ObservedState string `json:"observed_state,omitempty"`
+	LatencyMS     int64  `json:"latency_ms,omitempty"`
+	VerifyTrust   uint8  `json:"verify_trust,omitempty"`
+	AuthTrust     uint8  `json:"auth_trust,omitempty"`
 }
 
 // New builds the MCP server over a started runtime.
@@ -84,6 +96,13 @@ func New(rt *runtime.Runtime, version string) *mcp.Server {
 		out := invokeOut{Status: string(eff.Status), Verifiable: eff.Verifiable(), Message: eff.Message}
 		if eff.Record != nil {
 			out.Metrics = eff.Record.Metrics
+		}
+		if ev := eff.Evidence; ev != nil {
+			out.Evidence = &evidenceOut{
+				Requested: ev.Requested, Protocol: ev.Protocol, NativeAck: ev.NativeAck,
+				ObservedState: ev.ObservedState, LatencyMS: ev.LatencyMS,
+				VerifyTrust: ev.VerifyTrust, AuthTrust: ev.AuthTrust,
+			}
 		}
 		return nil, out, nil
 	})

@@ -151,3 +151,33 @@ func (m *memSink) count() int {
 	defer m.mu.Unlock()
 	return len(m.devices)
 }
+
+// TestEvidencePopulated pins R02 §14: a verified effect carries structured
+// provenance, not just a metric — what was requested, over which protocol,
+// whether the device acked natively, what state was observed, how long it
+// took, and both trust levels.
+func TestEvidencePopulated(t *testing.T) {
+	_, a, _ := testRig(t)
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "plc-1", Capability: "switch.onoff", Args: map[string]any{"on": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := eff.Evidence
+	if ev == nil {
+		t.Fatal("verified effect must carry Evidence")
+	}
+	if ev.Protocol != "modbus" || !ev.NativeAck {
+		t.Fatalf("provenance wrong: %+v", ev)
+	}
+	if ev.Requested == "" || ev.ObservedState == "" {
+		t.Fatalf("requested/observed missing: %+v", ev)
+	}
+	if ev.VerifyTrust != 2 || ev.AuthTrust != 1 {
+		t.Fatalf("dual trust axes wrong: verify=%d auth=%d", ev.VerifyTrust, ev.AuthTrust)
+	}
+	if ev.LatencyMS < 0 {
+		t.Fatalf("latency must be stamped: %d", ev.LatencyMS)
+	}
+}

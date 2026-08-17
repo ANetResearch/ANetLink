@@ -215,7 +215,12 @@ func (a *Adapter) Invoke(ctx context.Context, call sdk.Call) (effect.Effect, err
 	if !ok {
 		return sdk.NewEffect().Unavailable(fmt.Sprintf("non-numeric value %v", val.Value())).Build(), nil
 	}
-	return sdk.NewEffect().Metric(metric, f).Verified().Build(), nil
+	return sdk.NewEffect().Metric(metric, f).
+		Requested(fmt.Sprintf("%s=%v", nm.ID, call.Args["value"])).
+		Protocol("opcua").NativeAck(true).
+		Observed(strconv.FormatFloat(f, 'f', -1, 64)).
+		Trust(uint8(profile.V2), uint8(profile.A2)).
+		Verified().Build(), nil
 }
 
 // coerce turns JSON-decoded args into OPC UA-friendly Go types.

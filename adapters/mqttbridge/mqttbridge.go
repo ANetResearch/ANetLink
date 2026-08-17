@@ -271,7 +271,11 @@ func (a *Adapter) Invoke(ctx context.Context, call sdk.Call) (effect.Effect, err
 			if strings.EqualFold(got, "ON") {
 				v = 1.0
 			}
-			b := sdk.NewEffect().Metric(metric, v)
+			b := sdk.NewEffect().Metric(metric, v).
+				Requested(fmt.Sprintf("%s=%v", call.Capability, want)).
+				Protocol("mqtt").NativeAck(true).
+				Observed(got).
+				Trust(uint8(profile.V2), uint8(profile.A1))
 			if (v == 1.0) == want {
 				return b.Verified().Build(), nil
 			}

@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -193,7 +194,12 @@ func (a *Adapter) Invoke(ctx context.Context, call sdk.Call) (effect.Effect, err
 					Fail(fmt.Sprintf("readback mismatch: wrote %v, device reports %v", expected, got)).Build(), nil
 			}
 		}
-		return sdk.NewEffect().Metric(metric, got).Verified().Build(), nil
+		return sdk.NewEffect().Metric(metric, got).
+			Requested(fmt.Sprintf("%s=%v", cm.ID, call.Args["on"])).
+			Protocol("modbus").NativeAck(true).
+			Observed(fmt.Sprintf("%v", got == 1)).
+			Trust(uint8(profile.V2), uint8(profile.A1)).
+			Verified().Build(), nil
 
 	case "holding":
 		scale := cm.Scale
@@ -217,7 +223,12 @@ func (a *Adapter) Invoke(ctx context.Context, call sdk.Call) (effect.Effect, err
 			return sdk.NewEffect().Fail("short readback").Build(), nil
 		}
 		got := float64(uint16(rb[0])<<8|uint16(rb[1])) * scale
-		return sdk.NewEffect().Metric(metric, got).Verified().Build(), nil
+		return sdk.NewEffect().Metric(metric, got).
+			Requested(fmt.Sprintf("%s=%v", cm.ID, call.Args["value"])).
+			Protocol("modbus").NativeAck(true).
+			Observed(strconv.FormatFloat(got, 'f', -1, 64)).
+			Trust(uint8(profile.V2), uint8(profile.A1)).
+			Verified().Build(), nil
 	}
 	return sdk.NewEffect().Fail(fmt.Sprintf("unsupported kind %q", cm.Kind)).Build(), nil
 }
