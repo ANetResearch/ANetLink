@@ -1,0 +1,7 @@
+export ANETLINK_MQTT_BROKER=tcp://127.0.0.1:18830
+export ANETLINK_MODBUS_ADDR=127.0.0.1:15020
+export ANETLINK_HA_URL=ws://127.0.0.1:18123/api/websocket
+export ANETLINK_HA_TOKEN=<long-lived access token of the test Home Assistant>
+export ANETLINK_OPCUA_ENDPOINT=opc.tcp://127.0.0.1:50000
+export ANETLINK_RTSP_URI=rtsp://127.0.0.1:8554/cam
+export ANETLINK_ONVIF_XADDR=http://192.0.2.93:8081/onvif/device_service
