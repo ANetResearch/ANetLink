@@ -146,12 +146,6 @@ func (m *memSink) get(id string) (sdk.Device, bool) {
 	return d, ok
 }
 
-func (m *memSink) count() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.devices)
-}
-
 // TestEvidencePopulated pins R02 §14: a verified effect carries structured
 // provenance, not just a metric — what was requested, over which protocol,
 // whether the device acked natively, what state was observed, how long it

@@ -23,6 +23,15 @@ import (
 )
 
 // Curve is P-256 (Matter's SPAKE2+ ciphersuite: P256-SHA256-HKDF-HMAC).
+//
+// This package uses the low-level crypto/elliptic point operations, which Go
+// deprecated in 1.21 in favour of crypto/ecdh. That advice does not apply
+// here: crypto/ecdh deliberately exposes only Diffie-Hellman, while SPAKE2+
+// needs arbitrary scalar multiplication of the fixed points M and N plus
+// point addition (pA = X + w0*M). No standard-library API provides those, so
+// staticcheck's SA1019 findings in this file are expected and accepted.
+// Correctness is pinned instead by the RFC 9383 and connectedhomeip vectors
+// in this package's tests.
 var curve = elliptic.P256()
 
 // M and N are the fixed points from RFC 9383 §4 for P-256 (compressed form).

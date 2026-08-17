@@ -1,9 +1,9 @@
 module github.com/ANetResearch/ANetLink
 
-go 1.26.1
+go 1.26.6
 
 require (
-	github.com/ANetResearch/ANetCore v0.4.0
+	github.com/ANetResearch/ANetCore v0.4.1
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/gopcua/opcua v0.9.1
 	github.com/gorilla/websocket v1.5.3
