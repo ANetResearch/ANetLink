@@ -215,3 +215,71 @@ func TestProbeHonestWithoutCoordinator(t *testing.T) {
 	}
 	t.Logf("zigbee probe without hardware: %s", av.Detail)
 }
+
+// --- discovery (the "convenient onboarding" path) ---
+
+func TestParseMgmtLQIResponse(t *testing.T) {
+	// srcAddr(2) status(1) total(1) start(1) count(1) then 22-byte entries
+	entry := make([]byte, 22)
+	binary.LittleEndian.PutUint64(entry[8:], 0x00124B0001CE4B7A) // IEEE
+	binary.LittleEndian.PutUint16(entry[16:], 0xA1B2)            // short addr
+	resp := append([]byte{0x00, 0x00, 0x00, 0x01, 0x00, 0x01}, entry...)
+	ns, err := ParseMgmtLQIResponse(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ns) != 1 || ns[0].ShortAddr != 0xA1B2 || ns[0].IEEE != 0x00124B0001CE4B7A {
+		t.Fatalf("neighbour decode: %+v", ns)
+	}
+}
+
+func TestParseActiveEPResponse(t *testing.T) {
+	resp := []byte{0x00, 0x00, 0x00, 0xB2, 0xA1, 0x02, 0x01, 0x0B}
+	eps, err := ParseActiveEPResponse(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eps) != 2 || eps[0] != 1 || eps[1] != 11 {
+		t.Fatalf("endpoint list: %v", eps)
+	}
+	if _, err := ParseActiveEPResponse([]byte{0x00, 0x00, 0x01}); err == nil {
+		t.Fatal("failure status must be rejected")
+	}
+}
+
+func TestParseSimpleDescResponse(t *testing.T) {
+	// ... status ok, endpoint 1, profile 0x0104, device 0x0100, version 1,
+	// 2 input clusters: OnOff(0x0006), TemperatureMeasurement(0x0402)
+	resp := []byte{0x00, 0x00, 0x00, 0xB2, 0xA1, 0x0C, 0x01, 0x04, 0x01, 0x00, 0x01, 0x02,
+		0x06, 0x00, 0x02, 0x04}
+	clusters, err := ParseSimpleDescResponse(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clusters) != 2 || clusters[0] != ClusterOnOff || clusters[1] != ClusterTemperatureMeas {
+		t.Fatalf("cluster list: %04x", clusters)
+	}
+}
+
+// TestAsDeviceConfigsFiltersUnmappable proves discovery hands the user a
+// config containing only clusters ANetLink can actually expose.
+func TestAsDeviceConfigsFiltersUnmappable(t *testing.T) {
+	found := []DiscoveredDevice{{
+		ShortAddr: 0xA1B2, IEEE: 0x00124B0001CE4B7A,
+		Endpoints: []EndpointConfig{
+			{ID: "1", Endpoint: 1, Clusters: []uint16{ClusterOnOff, 0xFFFE /* unknown */}},
+			{ID: "2", Endpoint: 2, Clusters: []uint16{0xFFFF}}, // nothing usable
+		},
+	}}
+	cfgs := AsDeviceConfigs(found)
+	if len(cfgs) != 1 {
+		t.Fatalf("want one usable device, got %d", len(cfgs))
+	}
+	c := cfgs[0]
+	if c.ID != "zb-00124b0001ce4b7a" {
+		t.Fatalf("id must derive from the IEEE address: %s", c.ID)
+	}
+	if len(c.Endpoints) != 1 || len(c.Endpoints[0].Clusters) != 1 {
+		t.Fatalf("unmappable clusters must be dropped: %+v", c.Endpoints)
+	}
+}

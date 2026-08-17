@@ -108,7 +108,40 @@ func New(rt *runtime.Runtime, version string) *mcp.Server {
 		return nil, out, nil
 	})
 
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "devices_discover",
+		Description: "Scan the connected networks (Zigbee, BACnet, …) for devices that are present but not yet configured. Returns each find with a suggested id, its capabilities and a ready-to-paste config fragment — the fast path from 'I have a device' to 'the agent can call it'.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, discoverOut, error) {
+		found, errs := rt.DiscoverAll(ctx)
+		out := discoverOut{}
+		for _, f := range found {
+			out.Found = append(out.Found, foundView{
+				SuggestedID: f.SuggestedID, Protocol: f.Protocol, Label: f.Label,
+				Address: f.Address, Capabilities: f.Capabilities, ConfigHint: f.ConfigHint,
+			})
+		}
+		for name, err := range errs {
+			out.Problems = append(out.Problems, name+": "+err.Error())
+		}
+		return nil, out, nil
+	})
+
 	return s
+}
+
+// foundView is the tool-facing projection of a discovered device.
+type foundView struct {
+	SuggestedID  string   `json:"suggested_id"`
+	Protocol     string   `json:"protocol"`
+	Label        string   `json:"label,omitempty"`
+	Address      string   `json:"address,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
+	ConfigHint   string   `json:"config_hint,omitempty" jsonschema:"JSON fragment to paste into anetlinkd config"`
+}
+
+type discoverOut struct {
+	Found    []foundView `json:"found"`
+	Problems []string    `json:"problems,omitempty" jsonschema:"adapters that could not scan, and why"`
 }
 
 func parseKey(s string) (runtime.DeviceKey, error) {

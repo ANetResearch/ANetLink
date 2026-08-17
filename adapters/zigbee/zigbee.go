@@ -61,6 +61,8 @@ type Adapter struct {
 	stop context.CancelFunc
 	// pending correlates AF data confirms/responses by (addr, cluster).
 	pending map[uint32]chan []byte
+	// zdoWaiters correlates ZDO responses by command id (discovery).
+	zdoWaiters map[byte]chan []byte
 }
 
 func New(cfg Config) *Adapter {
@@ -120,6 +122,15 @@ func (a *Adapter) Start(ctx context.Context, _ sdk.Backend, sink sdk.Sink) error
 	a.stop = cancel
 	go a.readLoop(rctx, p)
 
+	// Convenience over configuration: with no device list, ask the network.
+	if len(a.cfg.Devices) == 0 {
+		found, derr := a.Discover(ctx)
+		if derr == nil {
+			a.mu.Lock()
+			a.cfg.Devices = AsDeviceConfigs(found)
+			a.mu.Unlock()
+		}
+	}
 	for _, d := range a.cfg.Devices {
 		sink.UpsertDevice(sdk.Device{ID: d.ID, Profile: a.profileFor(d), Online: true})
 	}
@@ -171,6 +182,19 @@ func (a *Adapter) readLoop(ctx context.Context, r io.Reader) {
 		f, err := ReadFrame(r)
 		if err != nil {
 			return
+		}
+		if f.Subsys == SubsysZDO {
+			a.mu.Lock()
+			ch := a.zdoWaiters[f.Cmd]
+			delete(a.zdoWaiters, f.Cmd)
+			a.mu.Unlock()
+			if ch != nil {
+				select {
+				case ch <- f.Data:
+				default:
+				}
+			}
+			continue
 		}
 		if f.Subsys == SubsysAF && f.Cmd == afIncomingMsg && len(f.Data) > 17 {
 			// AF_INCOMING_MSG: groupID(2) clusterID(2) srcAddr(2) srcEP(1)

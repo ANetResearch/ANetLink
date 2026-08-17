@@ -54,3 +54,29 @@ type Adapter interface {
 	Stop(ctx context.Context) error
 	Invoke(ctx context.Context, call Call) (effect.Effect, error)
 }
+
+// Found is one device an adapter discovered on its own — the raw material
+// for zero-configuration onboarding.
+type Found struct {
+	// SuggestedID is a stable id derived from something the device owns
+	// (IEEE address, instance number, MAC), safe to write into a config.
+	SuggestedID string
+	// Protocol names the transport it was found on.
+	Protocol string
+	// Label is a human-friendly name if the device advertised one.
+	Label string
+	// Address is how to reach it (adapter-specific form).
+	Address string
+	// Capabilities lists the capability ids it appears to offer.
+	Capabilities []string
+	// ConfigHint is a ready-to-paste JSON fragment for this device.
+	ConfigHint string
+}
+
+// Discoverer is implemented by adapters that can enumerate their network
+// without a hand-written device list. This is the difference between "you
+// can integrate any protocol" and "integrating is convenient" — the point of
+// ANetLink (K210): a user should be able to ask what is out there.
+type Discoverer interface {
+	Discover(ctx context.Context) ([]Found, error)
+}

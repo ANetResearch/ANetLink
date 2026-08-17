@@ -184,3 +184,54 @@ func (s *sink) RemoveDevice(id string) {
 func (s *sink) State(string, map[string]float64) {
 	// v0: state stream not yet persisted; will feed the STATE surface + AEL.
 }
+
+// DiscoverAll asks every registered adapter that supports discovery to
+// enumerate its network, and returns everything found. Adapters that cannot
+// discover are skipped silently; an adapter that errors contributes its
+// error without failing the sweep — a Zigbee stick being unplugged should
+// not hide the BACnet devices.
+func (r *Runtime) DiscoverAll(ctx context.Context) ([]sdk.Found, map[string]error) {
+	r.mu.RLock()
+	adapters := make(map[string]sdk.Adapter, len(r.adapters))
+	for name, a := range r.adapters {
+		adapters[name] = a
+	}
+	r.mu.RUnlock()
+
+	var (
+		mu    sync.Mutex
+		found []sdk.Found
+		errs  = map[string]error{}
+		wg    sync.WaitGroup
+	)
+	for name, a := range adapters {
+		d, ok := a.(interface {
+			DiscoverDevices(context.Context) ([]sdk.Found, error)
+		})
+		if !ok {
+			continue
+		}
+		wg.Add(1)
+		go func(name string, d interface {
+			DiscoverDevices(context.Context) ([]sdk.Found, error)
+		}) {
+			defer wg.Done()
+			got, err := d.DiscoverDevices(ctx)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errs[name] = err
+				return
+			}
+			found = append(found, got...)
+		}(name, d)
+	}
+	wg.Wait()
+	sort.Slice(found, func(i, j int) bool {
+		if found[i].Protocol != found[j].Protocol {
+			return found[i].Protocol < found[j].Protocol
+		}
+		return found[i].SuggestedID < found[j].SuggestedID
+	})
+	return found, errs
+}

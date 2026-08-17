@@ -242,3 +242,29 @@ func TestUnknownCapabilityAndDeadDevice(t *testing.T) {
 		t.Fatalf("dead device must be UNAVAILABLE: %+v", eff)
 	}
 }
+
+// TestParseIAm pins BACnet discovery decoding — how a building network
+// announces itself.
+func TestParseIAm(t *testing.T) {
+	// BVLL + NPDU + unconfirmed I-Am with device instance 1234
+	apdu := []byte{0x10, 0x00, 0xC4}
+	var oid [4]byte
+	binary.BigEndian.PutUint32(oid[:], (8<<22)|1234) // object type 8 = device
+	apdu = append(apdu, oid[:]...)
+	apdu = append(apdu, 0x22, 0x01, 0xE0) // max APDU 480
+	pkt := bvll(append([]byte{0x01, 0x00}, apdu...))
+
+	d, err := ParseIAm(pkt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Instance != 1234 {
+		t.Fatalf("instance decode: %d", d.Instance)
+	}
+	if d.MaxAPDU != 480 {
+		t.Fatalf("max APDU decode: %d", d.MaxAPDU)
+	}
+	if _, err := ParseIAm([]byte{0x81, 0x0b, 0x00, 0x08, 0x01, 0x00, 0x10, 0x08}); err == nil {
+		t.Fatal("a Who-Is must not parse as an I-Am")
+	}
+}
