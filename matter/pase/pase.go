@@ -15,6 +15,7 @@ package pase
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 
@@ -28,14 +29,16 @@ import (
 var pakeContextPrefix = []byte("CHIP PAKE V1 Commissioning")
 
 func matterContext(reqBytes, respBytes []byte) []byte {
-	// Matter §3.10: the SPAKE2+ context is the RAW concatenation of the
-	// prefix and the exact request+response payloads — NOT hashed. RFC 9383
-	// then length-prefixes this whole context inside the transcript.
-	ctx := make([]byte, 0, len(pakeContextPrefix)+len(reqBytes)+len(respBytes))
-	ctx = append(ctx, pakeContextPrefix...)
-	ctx = append(ctx, reqBytes...)
-	ctx = append(ctx, respBytes...)
-	return ctx
+	// Matter PASE context = SHA-256(prefix ‖ PBKDFParamRequest ‖
+	// PBKDFParamResponse) — confirmed against connectedhomeip PASESession.cpp
+	// (mCommissioningHash: AddData(prefix), AddData(req), AddData(resp),
+	// Finish → 32-byte digest passed to Spake2p.Init). RFC 9383 then
+	// length-prefixes this 32-byte context inside the transcript.
+	h := sha256.New()
+	h.Write(pakeContextPrefix)
+	h.Write(reqBytes)
+	h.Write(respBytes)
+	return h.Sum(nil)
 }
 
 // PBKDFParamRequest is the commissioner's opening message.
@@ -217,13 +220,17 @@ func expect(r *tlv.Reader, want tlv.Type) error {
 // Commissioner is the client-side PASE state machine. It holds the passcode
 // and the SPAKE2+ prover across the message round-trips.
 type Commissioner struct {
-	pass     uint32
-	prover   *spake2p.Prover
-	pa       []byte
-	confirm  *spake2p.Confirmation
-	req      *PBKDFParamRequest
-	reqBytes []byte // exact PBKDFParamRequest payload (for the context hash)
-	pakeCtx  []byte // Crypto_Hash(prefix ‖ request ‖ response)
+	pass uint32
+	// fixedX, when set, replaces the random scalar (test seam only — lets a
+	// diagnostic replay one handshake against several context candidates).
+	fixedX      []byte
+	overrideCtx []byte
+	prover      *spake2p.Prover
+	pa          []byte
+	confirm     *spake2p.Confirmation
+	req         *PBKDFParamRequest
+	reqBytes    []byte // exact PBKDFParamRequest payload (for the context hash)
+	pakeCtx     []byte // Crypto_Hash(prefix ‖ request ‖ response)
 }
 
 // NewCommissioner starts a PASE run for a setup passcode.
@@ -248,11 +255,18 @@ func (c *Commissioner) StartRequest(sessionID uint16) (*PBKDFParamRequest, []byt
 // bytes, derive w0/w1 from the passcode and the device's salt/iterations,
 // then compute the SPAKE2+ share pA. respBytes is the raw received payload.
 func (c *Commissioner) MakePake1(resp *PBKDFParamResponse, respBytes []byte) (*Pake1, []byte, error) {
-	c.pakeCtx = matterContext(c.reqBytes, respBytes)
+	if len(c.overrideCtx) > 0 {
+		c.pakeCtx = c.overrideCtx
+	} else {
+		c.pakeCtx = matterContext(c.reqBytes, respBytes)
+	}
 	w0, w1 := spake2p.ComputeW0W1(c.pass, resp.Salt, int(resp.Iterations))
-	x := make([]byte, 32)
-	if _, err := rand.Read(x); err != nil {
-		return nil, nil, err
+	x := c.fixedX
+	if len(x) == 0 {
+		x = make([]byte, 32)
+		if _, err := rand.Read(x); err != nil {
+			return nil, nil, err
+		}
 	}
 	c.prover = spake2p.NewProver(w0, w1, x)
 	c.pa = c.prover.Share()
@@ -290,3 +304,12 @@ func (c *Commissioner) SharedSecret() ([]byte, error) {
 	}
 	return c.confirm.Ke, nil
 }
+
+// SetFixedScalar pins the prover's random scalar (diagnostics/tests only).
+func (c *Commissioner) SetFixedScalar(x []byte) { c.fixedX = x }
+
+// SetContextOverride forces the SPAKE2+ context (diagnostics only).
+func (c *Commissioner) SetContextOverride(ctx []byte) { c.overrideCtx = ctx }
+
+// RequestBytes returns the encoded PBKDFParamRequest (diagnostics).
+func (c *Commissioner) RequestBytes() []byte { return c.reqBytes }
