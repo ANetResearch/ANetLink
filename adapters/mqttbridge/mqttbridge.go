@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -384,4 +385,31 @@ func connect(broker, clientID string) (paho.Client, error) {
 		return nil, err
 	}
 	return cli, nil
+}
+
+// DiscoverDevices implements sdk.Discoverer: zigbee2mqtt publishes its device
+// list retained, so the bridge can enumerate without any configuration.
+func (a *Adapter) DiscoverDevices(ctx context.Context) ([]sdk.Found, error) {
+	a.mu.Lock()
+	binds := make(map[string]map[string]capBinding, len(a.binds))
+	for k, v := range a.binds {
+		binds[k] = v
+	}
+	a.mu.Unlock()
+	out := make([]sdk.Found, 0, len(binds))
+	for name, caps := range binds {
+		ids := make([]string, 0, len(caps))
+		for id := range caps {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		out = append(out, sdk.Found{
+			SuggestedID:  name,
+			Protocol:     "mqtt",
+			Address:      name,
+			Capabilities: ids,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].SuggestedID < out[j].SuggestedID })
+	return out, nil
 }

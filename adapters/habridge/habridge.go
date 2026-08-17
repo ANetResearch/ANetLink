@@ -393,3 +393,42 @@ func (a *Adapter) liveRead(ctx context.Context, entityID, metric string) (effect
 	}
 	return sdk.NewEffect().Unavailable("entity vanished from HA").Build(), nil
 }
+
+// DiscoverDevices implements sdk.Discoverer: Home Assistant already knows
+// every entity it manages, so onboarding is a question, not a spreadsheet.
+func (a *Adapter) DiscoverDevices(ctx context.Context) ([]sdk.Found, error) {
+	raw, err := a.call(ctx, map[string]any{"type": "get_states"})
+	if err != nil {
+		return nil, err
+	}
+	var entities []haEntity
+	if err := json.Unmarshal(raw, &entities); err != nil {
+		return nil, err
+	}
+	out := make([]sdk.Found, 0, len(entities))
+	for _, e := range entities {
+		domain := strings.SplitN(e.EntityID, ".", 2)[0]
+		var capID string
+		switch domain {
+		case "switch", "light":
+			capID = domain + ".onoff"
+		case "sensor":
+			class, _ := e.Attributes["device_class"].(string)
+			if class == "" {
+				class = "value"
+			}
+			capID = "sensor." + class
+		default:
+			continue
+		}
+		label, _ := e.Attributes["friendly_name"].(string)
+		out = append(out, sdk.Found{
+			SuggestedID:  e.EntityID,
+			Protocol:     "homeassistant",
+			Label:        label,
+			Address:      e.EntityID,
+			Capabilities: []string{capID},
+		})
+	}
+	return out, nil
+}

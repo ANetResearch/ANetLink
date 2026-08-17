@@ -25,6 +25,8 @@ func main() {
 	demo := flag.Bool("demo", false, "run one demo invocation and exit")
 	serveMCP := flag.Bool("mcp", false, "serve the MCP northbound on stdio (for Claude Code / IDE clients)")
 	configPath := flag.String("config", "", "path to anetlinkd JSON config")
+	scan := flag.Bool("scan", false, "discover devices on the connected networks and print a suggested config")
+	scanOut := flag.String("scan-out", "", "with --scan, write the suggested config to this file")
 	c1Socket := flag.String("c1-socket", "", "serve the C1 provider wire on this unix socket (for the ANet daemon shim)")
 	flag.Parse()
 
@@ -53,6 +55,13 @@ func main() {
 		cid, _ := d.Profile.CID()
 		log.Printf("device %s/%s online=%v trust=T%d profile=%s",
 			d.Profile.Protocol, d.ID, d.Online, d.Profile.MaxTrust, cid)
+	}
+
+	if *scan {
+		if err := runScan(rt, *scanOut); err != nil {
+			log.Fatalf("anetlinkd: scan: %v", err)
+		}
+		return
 	}
 
 	if *c1Socket != "" {
