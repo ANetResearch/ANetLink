@@ -10,19 +10,35 @@
 //	GET  /v0/capabilities  → {"capabilities": ["light.onoff@sim/lamp-1", ...]}
 //	GET  /v0/describe      → {"cid": ""}            (DeviceCatalog CAS object: later)
 //	POST /v0/invoke        {"capability": "...", "args": {...}, "call_id": "..."}
-//	                       → {"status": "...", "metrics": {...}, "message": "..."}
+//	                       → {"status": "...", "metrics": {...}, "message": "...",
+//	                          "evidence": {...}}
+//
+// Encoding (D52 / AELP §7): CoreDet-CBOR is the canonical wire form —
+// request bodies with Content-Type: application/cbor are decoded as CBOR,
+// and a client that sends Accept: application/cbor gets CBOR back. JSON
+// remains available for debugging, per the AELP transport profile.
 package c1serv
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
 
+	"github.com/ANetResearch/ANetCore/coredet"
 	"github.com/ANetResearch/ANetLink/runtime"
 )
+
+// contentCBOR is the AELP canonical media type.
+const contentCBOR = "application/cbor"
+
+// wantsCBOR reports whether the client asked for a CBOR response.
+func wantsCBOR(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept"), contentCBOR)
+}
 
 // CapabilityID mints the C1 wire id for one device capability.
 func CapabilityID(capID string, key runtime.DeviceKey) string {
@@ -45,16 +61,28 @@ func ParseCapabilityID(s string) (capID string, key runtime.DeviceKey, err error
 }
 
 type invokeReq struct {
-	Capability string         `json:"capability"`
-	Args       map[string]any `json:"args,omitempty"`
-	CallID     string         `json:"call_id,omitempty"`
-	CallerAID  string         `json:"caller_aid,omitempty"`
+	Capability string         `json:"capability" cbor:"1,keyasint"`
+	Args       map[string]any `json:"args,omitempty" cbor:"2,keyasint,omitempty"`
+	CallID     string         `json:"call_id,omitempty" cbor:"3,keyasint,omitempty"`
+	CallerAID  string         `json:"caller_aid,omitempty" cbor:"4,keyasint,omitempty"`
 }
 
 type invokeResp struct {
-	Status  string             `json:"status"`
-	Metrics map[string]float64 `json:"metrics,omitempty"`
-	Message string             `json:"message,omitempty"`
+	Status   string             `json:"status" cbor:"1,keyasint"`
+	Metrics  map[string]float64 `json:"metrics,omitempty" cbor:"2,keyasint,omitempty"`
+	Message  string             `json:"message,omitempty" cbor:"3,keyasint,omitempty"`
+	Evidence *evidenceWire      `json:"evidence,omitempty" cbor:"4,keyasint,omitempty"`
+}
+
+// evidenceWire mirrors effect.Evidence on the C1 wire.
+type evidenceWire struct {
+	Requested     string `json:"requested,omitempty" cbor:"1,keyasint,omitempty"`
+	Protocol      string `json:"protocol,omitempty" cbor:"2,keyasint,omitempty"`
+	NativeAck     bool   `json:"native_ack,omitempty" cbor:"3,keyasint,omitempty"`
+	ObservedState string `json:"observed_state,omitempty" cbor:"4,keyasint,omitempty"`
+	LatencyMS     int64  `json:"latency_ms,omitempty" cbor:"5,keyasint,omitempty"`
+	VerifyTrust   uint8  `json:"verify_trust,omitempty" cbor:"6,keyasint,omitempty"`
+	AuthTrust     uint8  `json:"auth_trust,omitempty" cbor:"7,keyasint,omitempty"`
 }
 
 // Handler builds the C1 HTTP handler over a started runtime.
@@ -63,12 +91,19 @@ func Handler(rt *runtime.Runtime) http.Handler {
 	mux.HandleFunc("GET /v0/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("GET /v0/capabilities", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /v0/capabilities", func(w http.ResponseWriter, r *http.Request) {
 		var caps []string
 		for _, d := range rt.Devices() {
 			key := runtime.DeviceKey{Adapter: d.Profile.Protocol, Device: d.ID}
 			for _, c := range d.Profile.Caps {
 				caps = append(caps, CapabilityID(c.ID, key))
+			}
+		}
+		if wantsCBOR(r) {
+			if b, err := coredet.Marshal(map[uint64]any{1: caps}); err == nil {
+				w.Header().Set("Content-Type", contentCBOR)
+				_, _ = w.Write(b)
+				return
 			}
 		}
 		writeJSON(w, map[string]any{"capabilities": caps})
@@ -78,7 +113,17 @@ func Handler(rt *runtime.Runtime) http.Handler {
 	})
 	mux.HandleFunc("POST /v0/invoke", func(w http.ResponseWriter, r *http.Request) {
 		var req invokeReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if strings.Contains(r.Header.Get("Content-Type"), contentCBOR) {
+			if err := coredet.Unmarshal(body, &req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		} else if err := json.Unmarshal(body, &req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -95,6 +140,23 @@ func Handler(rt *runtime.Runtime) http.Handler {
 		resp := invokeResp{Status: string(eff.Status), Message: eff.Message}
 		if eff.Record != nil {
 			resp.Metrics = eff.Record.Metrics
+		}
+		if ev := eff.Evidence; ev != nil {
+			resp.Evidence = &evidenceWire{
+				Requested: ev.Requested, Protocol: ev.Protocol, NativeAck: ev.NativeAck,
+				ObservedState: ev.ObservedState, LatencyMS: ev.LatencyMS,
+				VerifyTrust: ev.VerifyTrust, AuthTrust: ev.AuthTrust,
+			}
+		}
+		if wantsCBOR(r) {
+			b, err := coredet.Marshal(resp)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", contentCBOR)
+			_, _ = w.Write(b)
+			return
 		}
 		writeJSON(w, resp)
 	})

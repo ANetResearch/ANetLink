@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/ANetResearch/ANetCore/coredet"
 
 	"github.com/ANetResearch/ANetLink/adapters/sim"
 	"github.com/ANetResearch/ANetLink/runtime"
@@ -108,5 +111,51 @@ func TestInvokeMalformedID(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestCBORWire pins D52: the AELP canonical encoding. A client that speaks
+// CoreDet-CBOR gets CBOR back, byte-identical in meaning to the JSON form.
+func TestCBORWire(t *testing.T) {
+	cli, _ := udsClient(t)
+
+	req := map[uint64]any{1: "light.onoff@sim/lamp-1", 2: map[string]any{"on": true}}
+	body, err := coredet.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpReq, _ := http.NewRequest(http.MethodPost, "http://uds/v0/invoke", bytes.NewReader(body))
+	httpReq.Header.Set("Content-Type", "application/cbor")
+	httpReq.Header.Set("Accept", "application/cbor")
+	resp, err := cli.Do(httpReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); ct != "application/cbor" {
+		t.Fatalf("expected CBOR response, got %q", ct)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	var out invokeResp
+	if err := coredet.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("response is not CoreDet-CBOR: %v", err)
+	}
+	if out.Status != "OK" || out.Metrics["power_state"] != 1 {
+		t.Fatalf("CBOR round-trip lost data: %+v", out)
+	}
+
+	// JSON must still work (debug profile)
+	jbody, _ := json.Marshal(map[string]any{"capability": "light.onoff@sim/lamp-1", "args": map[string]any{"on": false}})
+	jr, err := cli.Post("http://uds/v0/invoke", "application/json", bytes.NewReader(jbody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer jr.Body.Close()
+	var jout invokeResp
+	if err := json.NewDecoder(jr.Body).Decode(&jout); err != nil {
+		t.Fatal(err)
+	}
+	if jout.Status != "OK" {
+		t.Fatalf("JSON path broken: %+v", jout)
 	}
 }
