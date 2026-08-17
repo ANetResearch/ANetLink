@@ -229,7 +229,9 @@ func AsDeviceConfigs(found []DiscoveredDevice) []DeviceConfig {
 	return out
 }
 
-// Discover implements sdk.Discoverer: enumerate the Zigbee network and
+var _ sdk.Discoverer = (*Adapter)(nil)
+
+// DiscoverDevices implements sdk.Discoverer: enumerate the Zigbee network and
 // describe each node in a form the operator can paste into a config.
 func (a *Adapter) DiscoverDevices(ctx context.Context) ([]sdk.Found, error) {
 	raw, err := a.Discover(ctx)

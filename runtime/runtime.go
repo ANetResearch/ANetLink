@@ -206,16 +206,15 @@ func (r *Runtime) DiscoverAll(ctx context.Context) ([]sdk.Found, map[string]erro
 		wg    sync.WaitGroup
 	)
 	for name, a := range adapters {
-		d, ok := a.(interface {
-			DiscoverDevices(context.Context) ([]sdk.Found, error)
-		})
+		// Named interface, not a structural literal: an adapter whose
+		// method drifts from the C4 contract must fail to compile, not be
+		// silently skipped here and appear as an empty network.
+		d, ok := a.(sdk.Discoverer)
 		if !ok {
 			continue
 		}
 		wg.Add(1)
-		go func(name string, d interface {
-			DiscoverDevices(context.Context) ([]sdk.Found, error)
-		}) {
+		go func(name string, d sdk.Discoverer) {
 			defer wg.Done()
 			got, err := d.DiscoverDevices(ctx)
 			mu.Lock()
@@ -254,16 +253,12 @@ func (r *Runtime) PairAll(ctx context.Context, window time.Duration) ([]sdk.Foun
 		wg     sync.WaitGroup
 	)
 	for name, a := range adapters {
-		p, ok := a.(interface {
-			PairDevices(context.Context, time.Duration) ([]sdk.Found, error)
-		})
+		p, ok := a.(sdk.Pairer)
 		if !ok {
 			continue
 		}
 		wg.Add(1)
-		go func(name string, p interface {
-			PairDevices(context.Context, time.Duration) ([]sdk.Found, error)
-		}) {
+		go func(name string, p sdk.Pairer) {
 			defer wg.Done()
 			got, err := p.PairDevices(ctx, window)
 			mu.Lock()

@@ -159,6 +159,8 @@ func (a *Adapter) describeJoined(ctx context.Context, joined []JoinEvent) []Devi
 	return AsDeviceConfigs(found)
 }
 
+var _ sdk.Pairer = (*Adapter)(nil)
+
 // PairDevices implements sdk.Pairer: open the network, describe whatever
 // joins, and hand back both the capabilities and a paste-ready config.
 func (a *Adapter) PairDevices(ctx context.Context, window time.Duration) ([]sdk.Found, error) {

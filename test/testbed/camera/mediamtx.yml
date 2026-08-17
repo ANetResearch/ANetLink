@@ -1,0 +1,12 @@
+# A real RTSP server publishing a real H.264 stream, so the ANetLink RTSP
+# probe meets an actual media plane rather than a mock socket.
+logLevel: info
+rtspAddress: :8554
+paths:
+  cam:
+    runOnInit: >
+      ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=15
+      -f lavfi -i sine=frequency=440
+      -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p
+      -c:a aac -f rtsp rtsp://localhost:8554/cam
+    runOnInitRestart: yes

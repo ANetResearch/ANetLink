@@ -78,15 +78,21 @@ type Found struct {
 // without a hand-written device list. This is the difference between "you
 // can integrate any protocol" and "integrating is convenient" — the point of
 // ANetLink (K210): a user should be able to ask what is out there.
+//
+// The method is DiscoverDevices rather than Discover because several
+// adapters already have a protocol-native Discover of their own returning a
+// protocol-native type (zigbee.Discover yields []DiscoveredDevice). Keeping
+// the C4 name distinct lets an adapter offer both without one shadowing the
+// other.
 type Discoverer interface {
-	Discover(ctx context.Context) ([]Found, error)
+	DiscoverDevices(ctx context.Context) ([]Found, error)
 }
 
 // Pairer is implemented by adapters that can admit new devices — opening a
 // Zigbee network, commissioning a Matter node, provisioning a mesh node.
 // Buying a device and using it should not require editing configuration.
 type Pairer interface {
-	// Pair admits devices for the given window and returns what joined,
-	// described well enough to use immediately.
-	Pair(ctx context.Context, window time.Duration) ([]Found, error)
+	// PairDevices admits devices for the given window and returns what
+	// joined, described well enough to use immediately.
+	PairDevices(ctx context.Context, window time.Duration) ([]Found, error)
 }

@@ -6,8 +6,15 @@
 #   modbus    真第三方 Python Modbus/TCP 服务端                   :15020
 #   otns      OpenThread 网络模拟器（真 OT 栈离散事件仿真）        :8997-9000
 #   matter    matter.js 虚拟灯 — 真 Matter 协议栈、LAN 可配对（host 网络, UDP 5540）
+#   rtsp      mediamtx + ffmpeg — 真 RTSP 服务端、真 H.264 流          :8554
+#   onvif     真 ONVIF Profile S 设备服务（WS-Discovery 可被发现）      :8081
 #
 # Zigbee 无纯软件网络模拟（协调器硬件必需）——由 mqtt 层模拟覆盖，真棒到位后转 L2。
+#
+# 摄像头这一路的边界要说清楚：onvif-server 只实现 Profile S（取流），
+# 没有 PTZ、没有事件、没有 JPEG 抓拍端点。因此 L1 只能验证发现、能力投影
+# 与 RTSP 探测；PTZ / 事件 / 抓拍属 L2，需真机（见 docs/realworld-testing-zh.md）。
+# 海康 ISAPI 与大华 CGI 是厂商私有协议，无模拟器，一律 L2。
 services:
   ha:
     image: homeassistant/home-assistant:stable
@@ -39,6 +46,21 @@ services:
     command: bash -c "npm config set registry https://registry.npmmirror.com && npx -y -p @matter/examples matter-device --type light"
     volumes: ["matter-storage:/root/.matter"]
     restart: unless-stopped
+
+  rtsp:
+    image: bluenviron/mediamtx:latest-ffmpeg
+    network_mode: host   # RTSP on :8554
+    volumes: ["./camera/mediamtx.yml:/mediamtx.yml:ro"]
+    restart: unless-stopped
+  onvif:
+    image: ghcr.io/daniela-hase/onvif-server:latest
+    network_mode: host   # WS-Discovery needs the host's multicast interface
+    volumes: ["./camera/onvif.yaml:/onvif.yaml:ro"]
+    depends_on: [rtsp]
+    restart: unless-stopped
+    # NOTE: camera/onvif.yaml pins a MAC that must exist on this host — the
+    # server resolves its advertised IP from it. up.sh rewrites it; edit it
+    # by hand if you bring the rig up with compose directly.
 
 volumes:
   matter-storage:

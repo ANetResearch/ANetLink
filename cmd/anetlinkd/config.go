@@ -68,7 +68,16 @@ func (c *fileConfig) buildAdapters() ([]namedAdapter, error) {
 	}
 	for key := range c.Adapters {
 		if !known[key] {
-			return nil, fmt.Errorf("adapter %q configured but not compiled into this build (no_%s?)", key, key)
+			// Point at the right fix: the vendor adapters are opt-in and
+			// need a tag added, while the protocol adapters are opt-out and
+			// need one removed. Telling an operator to drop `no_onvif` when
+			// the real problem is a missing `-tags onvif` wastes their time.
+			if additiveTags[key] {
+				return nil, fmt.Errorf(
+					"adapter %q is configured but not compiled in — rebuild with `-tags %s`", key, key)
+			}
+			return nil, fmt.Errorf(
+				"adapter %q configured but not compiled into this build (built with no_%s?)", key, key)
 		}
 	}
 	return out, nil

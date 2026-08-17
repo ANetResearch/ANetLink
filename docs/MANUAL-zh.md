@@ -348,6 +348,78 @@ Thread 是**承载**不是应用协议,经 Border Router 触达设备。
 - 现状：边界路由器状态与设备投影可用;**CoAP 设备路径尚未实现,如实报
   UNAVAILABLE 而不是编造读数**。
 
+### 6.14 onvif（IP 摄像头，标准路径）
+
+**默认不编入**，需 `-tags onvif`（理由见 §9.1）。
+
+```jsonc
+"onvif": {
+  "verify_stream": true,            // 取流前先做 RTSP DESCRIBE 验活，强烈建议开
+  "discovery_interface": "eth0",    // 可选，限定 WS-Discovery 的网卡
+  "devices": [{
+    "id": "cam-front",
+    "xaddr": "http://192.168.1.64/onvif/device_service",  // --scan 会直接给出
+    "user": "admin", "pass": "…",
+    "profile_token": "MainStream",  // 可选，多目摄像机务必显式指定
+    "events": true                  // 开 PullPoint 订阅（长轮询，默认关）
+  }]
+}
+```
+
+能力按**相机实际应答**投影,不按协议应许:没有 PTZ 服务就不会声明 `ptz.*`,
+没开 events 就不会声明 `event.*`。
+
+`anetlinkd --tags onvif --scan` 通过 WS-Discovery 直接找出全网摄像头,
+连 IP 都不用你去路由器里翻。
+
+### 6.15 hikvision（海康 ISAPI）/ 6.16 dahua（大华 CGI）
+
+**默认不编入**,需 `-tags hikvision` / `-tags dahua`。
+
+```jsonc
+"hikvision": {
+  "verify_stream": true,
+  "devices": [{"id":"hik-1","address":"192.168.1.64","user":"admin","pass":"…",
+               "channel":1,"stream":1,"events":true}]
+},
+"dahua": {
+  "devices": [{"id":"dh-1","address":"192.168.1.108","user":"admin","pass":"…",
+               "channel":1,"subtype":0,"events":true}]
+}
+```
+
+**既然有 ONVIF,为什么还要厂商适配器?** ONVIF 是互操作的地板,不是设备的全部。
+现场大量摄像机出厂就关了 ONVIF、或把 ONVIF 账号与 web 账号分开、或只给 Profile S。
+而厂商接口永远在线,且带完整的智能事件词汇(越线、区域入侵、人脸)。
+**两者都能用时优先 ONVIF**——它是标准;ONVIF 被关掉时,厂商适配器是"能用"和"砖头"的区别。
+
+### 6.17 媒体能力族（stream / ptz / event）
+
+摄像头是第一类**结果不是数字**的设备,所以能力族的形状与别处不同:
+
+| 能力 | 访问 | 结果落在哪 |
+|---|---|---|
+| `stream.rtsp` | GET | `Artifact{Path: rtsp://…}` —— **只给引用,ANetLink 永不代理视频** |
+| `stream.snapshot` | GET | `Artifact{ContentCID, SizeBytes}` —— 真字节,内容寻址 |
+| `ptz.move` | SET | `{pan,tilt,zoom}` 均为 **[-1,1]**,可选 `duration_ms` |
+| `ptz.stop` / `ptz.preset` | SET | 停止 / 调用预置位 |
+| `ptz.position` | GET/STATE | 绝对位置,这是 PTZ 可验证的基础 |
+| `event.motion` / `event.tamper` / `event.linecross` | STATE | 经 sink 上报,不可 invoke |
+
+三条设计红线,都关乎诚实:
+
+1. **`ptz.move` 的速度契约是统一的 [-1,1]**,厂商标度在适配器内部换算
+   (海康 [-100,100]、大华离散方向码 + 1..8 速度)。调用方不需要知道这是谁家的相机。
+2. **每次 move 都是有界的**,发完必停 —— ONVIF 的 continuous move 不停就一直转。
+3. **位置回读是 PTZ 的验证手段**。相机到了机械限位时会照常 ack 却纹丝不动,
+   只信 ack 就会报告一次没发生的转动 —— 这种情况我们报 UNVERIFIED 并说明"位置未变",
+   不报成功。
+
+**`verify_stream` 为什么重要**:`GetStreamUri` 只是返回一个字符串。相机会为一条
+配置错误、编码器没起来、或被自身防火墙挡住的流照样发 URI。不探测就当成功,正是
+"我发了命令" ≠ "我确认了效果"的混淆。开启后会真做一次 RTSP DESCRIBE,拿到 SDP
+才算 V2 验证,并把真实编码(H264/H265)写进证据。
+
 ### 6.13 覆盖总表
 - **Matter**（纯 Go，长线）：已实现 TLV 编解码、mDNS 可配对发现、SPAKE2+、PASE 握手、
   消息帧层；剩 UDP exchange 环（MRP）+ commissioning 全流程后可真机配对。
@@ -429,7 +501,12 @@ CAN 读 V2 写 V1，A0 · sim V4/A4。
 
 ## 9. 裁剪发行版（build tag）
 
-适配器全部是**编译期插件**，用 `no_<name>` opt-out 剪裁（默认全含，发行版做减法）：
+适配器全部是**编译期插件**，但有**两套 tag 约定**，用哪一套本身就说明了适配器的性质。
+
+### 9.1 两套约定
+
+**减法（`no_<name>`）—— 协议适配器,默认编入。**
+它们对本地网络讲开放标准、不依赖发行版之外的任何东西,所以默认在;发行版做减法。
 
 | tag | 剪掉 |
 |---|---|
@@ -437,11 +514,33 @@ CAN 读 V2 写 V1，A0 · sim V4/A4。
 | `no_modbus` | Modbus 适配器 |
 | `no_mqtt` | MQTT/z2m 桥 |
 | `no_ha` | Home Assistant 桥 |
+| `no_zigbee` / `no_bacnet` / `no_can` / `no_ble` / `no_btmesh` / `no_thread` | 对应适配器 |
+
+**加法（`<name>`）—— 摄像头与厂商适配器,默认不编入,必须显式要。**
+
+| tag | 加入 |
+|---|---|
+| `onvif` | ONVIF IP 摄像头 |
+| `hikvision` | 海康 ISAPI |
+| `dahua` | 大华 CGI |
+
+**为什么反过来**:这些适配器经厂商 HTTP 接口触达设备、要持有凭据。
+默认构建里不带它们,意味着一个没人启用过的攻击面根本不存在于二进制中。
+这是你在 anet4 里定的原则的自然延伸 —— 裁剪是构建配置,不是 git 操作。
 
 ```bash
+# 默认发行版（无摄像头、无厂商接口）
+CGO_ENABLED=0 go build ./cmd/anetlinkd
+
+# 安防网关：全部摄像头能力
+CGO_ENABLED=0 go build -tags onvif,hikvision,dahua ./cmd/anetlinkd
+
 # 边缘盒子：只留 Modbus + BLE（示例）
 CGO_ENABLED=0 go build -tags no_mqtt,no_ha,no_sim ./cmd/anetlinkd
 ```
+
+配置里写了没编入的适配器,启动会响亮报错,并指出**正确的修法**——
+opt-in 的说"用 `-tags onvif` 重新构建",opt-out 的说"是不是带了 `no_x`"。
 
 CI 有 **unplug 矩阵**逐 tag 验证：剪裁后必须编译通过、启动成功——"可插拔"每次提交被验证，
 不是口头承诺。裁掉的适配器若在 config 里被引用，启动响亮报错。

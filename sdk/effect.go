@@ -3,20 +3,28 @@ package sdk
 import (
 	"time"
 
+	"github.com/ANetResearch/ANetCore/anetcid"
 	"github.com/ANetResearch/ANetCore/effect"
 	"github.com/ANetResearch/ANetCore/tsir"
+	"github.com/ANetResearch/ANetLink/profile"
 )
 
 // EffectBuilder constructs invocation effects with honest defaults: an
-// effect is UNVERIFIED until the adapter both attaches metrics and calls
-// Verified() — claiming OK without measurement is structurally impossible.
+// effect is UNVERIFIED until the adapter both attaches evidence-bearing
+// content and calls Verified() — claiming OK without measurement is
+// structurally impossible.
+//
+// "Evidence-bearing content" is a metric or an artifact. The media family
+// (profile/media.go) produces the latter: a snapshot that came back as real
+// JPEG bytes proves the camera responded just as surely as a number does.
 type EffectBuilder struct {
-	status  effect.Status
-	metrics map[string]float64
-	msg     string
-	ev      effect.Evidence
-	hasEv   bool
-	started time.Time
+	status    effect.Status
+	metrics   map[string]float64
+	artifacts []tsir.Artifact
+	msg       string
+	ev        effect.Evidence
+	hasEv     bool
+	started   time.Time
 }
 
 // NewEffect starts an UNVERIFIED effect. The clock starts now so Build can
@@ -65,8 +73,44 @@ func (b *EffectBuilder) Metric(name string, v float64) *EffectBuilder {
 	return b
 }
 
-// Verified marks the effect verifiable. Without at least one metric the
-// claim is vacuous and Build keeps the effect UNVERIFIED.
+// StreamURI attaches a live-stream reference (RTSP and friends). The URI is
+// a handle, not content: ANetLink never proxies video through the narrow
+// waist, so nothing here is content-addressed. On its own a URI is only a
+// claim that the device advertised an endpoint — an adapter that has not
+// actually reached the stream must leave the effect UNVERIFIED.
+func (b *EffectBuilder) StreamURI(uri string) *EffectBuilder {
+	b.artifacts = append(b.artifacts, tsir.Artifact{
+		Path:      uri,
+		MediaType: profile.MediaTypeRTSP,
+	})
+	return b
+}
+
+// Snapshot attaches a still frame by value: the bytes are content-addressed
+// so the same frame reported twice carries the same id, and a truncated
+// transfer cannot masquerade as a good one.
+func (b *EffectBuilder) Snapshot(data []byte, mediaType string) *EffectBuilder {
+	if len(data) == 0 {
+		return b // an empty frame is not evidence; leave the effect bare
+	}
+	cid, err := anetcid.SumRaw(data)
+	if err != nil {
+		return b
+	}
+	if mediaType == "" {
+		mediaType = profile.MediaTypeJPEG
+	}
+	b.artifacts = append(b.artifacts, tsir.Artifact{
+		Path:       "snapshot",
+		SizeBytes:  uint64(len(data)),
+		ContentCID: cid,
+		MediaType:  mediaType,
+	})
+	return b
+}
+
+// Verified marks the effect verifiable. Without at least one metric or
+// artifact the claim is vacuous and Build keeps the effect UNVERIFIED.
 func (b *EffectBuilder) Verified() *EffectBuilder {
 	b.status = effect.OK
 	return b
@@ -87,8 +131,8 @@ func (b *EffectBuilder) Unavailable(msg string) *EffectBuilder {
 // Build finalizes the effect, enforcing the honesty rules.
 func (b *EffectBuilder) Build() effect.Effect {
 	e := effect.Effect{Status: b.status, Message: b.msg}
-	if len(b.metrics) > 0 {
-		e.Record = &tsir.EffectRecord{Metrics: b.metrics}
+	if len(b.metrics) > 0 || len(b.artifacts) > 0 {
+		e.Record = &tsir.EffectRecord{Metrics: b.metrics, Artifacts: b.artifacts}
 	}
 	if e.Status == effect.OK && e.Record == nil {
 		e.Status = effect.Unverified // OK without measurement is not OK

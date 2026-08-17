@@ -132,6 +132,8 @@ func AsDeviceConfigs(found []DiscoveredDevice) []DeviceConfig {
 	return out
 }
 
+var _ sdk.Discoverer = (*Adapter)(nil)
+
 // DiscoverDevices implements sdk.Discoverer for BACnet/IP.
 func (a *Adapter) DiscoverDevices(ctx context.Context) ([]sdk.Found, error) {
 	found, err := Discover(ctx, "", 2*time.Second)

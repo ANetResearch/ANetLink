@@ -387,6 +387,8 @@ func connect(broker, clientID string) (paho.Client, error) {
 	return cli, nil
 }
 
+var _ sdk.Discoverer = (*Adapter)(nil)
+
 // DiscoverDevices implements sdk.Discoverer: zigbee2mqtt publishes its device
 // list retained, so the bridge can enumerate without any configuration.
 func (a *Adapter) DiscoverDevices(ctx context.Context) ([]sdk.Found, error) {

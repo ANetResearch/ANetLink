@@ -1,0 +1,30 @@
+# A real ONVIF Profile S device service in front of the mediamtx stream.
+onvif:
+  - mac: 00:0c:29:29:a5:9d
+    ports:
+      server: 8081
+      rtsp: 8555
+      snapshot: 8580
+    name: ANetLink-Testbed-Cam
+    uuid: 4d1dbc71-0000-4000-8000-0123456789ab
+    highQuality:
+      rtsp: /cam
+      snapshot: /cam
+      width: 640
+      height: 480
+      framerate: 15
+      bitrate: 1024
+      quality: 4
+    lowQuality:
+      rtsp: /cam
+      snapshot: /cam
+      width: 320
+      height: 240
+      framerate: 15
+      bitrate: 512
+      quality: 1
+    target:
+      hostname: 127.0.0.1
+      ports:
+        rtsp: 8554
+        snapshot: 8554

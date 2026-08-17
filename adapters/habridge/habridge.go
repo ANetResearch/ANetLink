@@ -394,6 +394,8 @@ func (a *Adapter) liveRead(ctx context.Context, entityID, metric string) (effect
 	return sdk.NewEffect().Unavailable("entity vanished from HA").Build(), nil
 }
 
+var _ sdk.Discoverer = (*Adapter)(nil)
+
 // DiscoverDevices implements sdk.Discoverer: Home Assistant already knows
 // every entity it manages, so onboarding is a question, not a spreadsheet.
 func (a *Adapter) DiscoverDevices(ctx context.Context) ([]sdk.Found, error) {
