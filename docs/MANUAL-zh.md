@@ -281,7 +281,35 @@ config 里 `"sim": {"enabled": false}` 显式关闭。信任 T4（进程内闭�
 会话密钥）；SPAKE2+ 同时对 RFC 9383 与 connectedhomeip 官方向量钉死。
 后续：加密会话 + commissioning 全流程（arm-failsafe/CSR/AddNOC）→ 集群交互。
 
-### 6.10 其余原生栈（在建）
+### 6.10 zigbee（原生 Z-Stack 协调器）
+**纯 Go 自研栈**：自己实现 UNPI 帧（含 XOR 校验与流重同步）与 ZCL 编解码，
+经串口驱动 TI Z-Stack 协调器棒——不需要 zigbee2mqtt、不需要 Python。
+
+- 集群映射：OnOff/Level/Temperature/Humidity/Occupancy → 能力（R02 §4:
+  Cluster→Capability、Attribute→Property）；多端点设备用 D50 端点层。
+- **诚实模型 = V2/A2**：加密网络 + 每设备链路密钥，读回属性即 metric。
+- 探测发 SYS_PING,普通串口设备冒充不了协调器。
+- 配置：`{"port":"/dev/ttyUSB0","baud":115200,"devices":[{"id","short_addr",
+  "endpoints":[{"id","endpoint","clusters":[6,1026]}]}]}`
+
+### 6.11 btmesh（蓝牙 Mesh）
+**密码学自己实现**：AES-CMAC（对 RFC 4493 向量钉死）、AES-CCM（Go 标准库没有,
+按 NIST SP 800-38C 自写）、mesh 密钥调度（k2 网络密钥、k4 AID）。
+
+- 模型映射：Element→Endpoint、Model→Capability（Generic OnOff / Sensor）。
+- **诚实模型 = V2/A2**：AppKey 认证每条消息;用错密钥的 PDU 被拒绝而非解析。
+- 未收到 status 的 set 报 UNVERIFIED。
+
+### 6.12 thread（Thread 承载）
+Thread 是**承载**不是应用协议,经 Border Router 触达设备。
+
+- **双后端**：宿主已跑的 OTBR（REST API,优先）/ **打包 otbr-agent 受管子进程**
+  ——这是全项目**唯一登记的跨语言豁免**（K207 A3′②）,未显式配置则完全不启用,
+  普通构建保持纯 Go。
+- 现状：边界路由器状态与设备投影可用;**CoAP 设备路径尚未实现,如实报
+  UNAVAILABLE 而不是编造读数**。
+
+### 6.13 覆盖总表
 - **Matter**（纯 Go，长线）：已实现 TLV 编解码、mDNS 可配对发现、SPAKE2+、PASE 握手、
   消息帧层；剩 UDP exchange 环（MRP）+ commissioning 全流程后可真机配对。
 - **Zigbee 原生 / BLE / 蓝牙 Mesh / Thread**：路线见 K207 §6 覆盖矩阵。Zigbee 无纯软件
