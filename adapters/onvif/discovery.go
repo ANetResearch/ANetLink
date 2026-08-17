@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ANetResearch/ANetLink/fingerprint"
 	"github.com/ANetResearch/ANetLink/sdk"
 )
 
@@ -121,9 +122,27 @@ func (a *Adapter) DiscoverDevices(ctx context.Context) ([]sdk.Found, error) {
 
 	out := make([]sdk.Found, 0, len(found))
 	for _, f := range found {
+		// Name the manufacturer before handing the list over. A scan that
+		// says "192.0.2.71" is an address list; one that says "Hikvision
+		// camera, driveable via onvif/hikvision" is an answer.
+		if host := hostOf(f.Address); host != "" {
+			if id, ok := fingerprint.IdentifyIP(ctx, host); ok {
+				f.Vendor = id.Vendor.Name
+				f.VendorNote = id.Describe()
+			}
+		}
 		out = append(out, f)
 	}
 	return out, nil
+}
+
+// hostOf extracts the bare host from a service URL.
+func hostOf(addr string) string {
+	u, err := url.Parse(addr)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 func multicastInterfaces(only string) ([]net.Interface, error) {

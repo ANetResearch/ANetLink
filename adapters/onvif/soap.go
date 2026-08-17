@@ -102,6 +102,7 @@ func envelope(header, body string) string {
 	b.WriteString(`<s:Envelope xmlns:s="` + nsSOAP + `"`)
 	b.WriteString(` xmlns:tds="` + nsDevice + `" xmlns:trt="` + nsMedia + `"`)
 	b.WriteString(` xmlns:tptz="` + nsPTZ + `" xmlns:tev="` + nsEvents + `"`)
+	b.WriteString(` xmlns:timg="` + nsImaging + `"`)
 	b.WriteString(` xmlns:tt="` + nsSchema + `" xmlns:wsa="` + nsAddr + `">`)
 	if header != "" {
 		b.WriteString(`<s:Header>` + header + `</s:Header>`)

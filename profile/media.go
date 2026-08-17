@@ -36,6 +36,48 @@ const (
 	// CapPTZPosition reads the absolute pan/tilt/zoom position. GET|STATE.
 	// This is what makes PTZ actuation verifiable rather than fire-and-forget.
 	CapPTZPosition = "ptz.position"
+	// CapPTZAbsolute drives to an absolute bearing: Args {pan,tilt,zoom} in
+	// [-1,1] coordinate space (not velocity), optional {speed}. SET.
+	//
+	// This is the capability an agent actually wants. "Point at the front
+	// door" is a position, and expressing it as a timed velocity nudge —
+	// the only thing ptz.move can do — makes the result depend on how
+	// loaded the camera happens to be.
+	CapPTZAbsolute = "ptz.absolute"
+	// CapPTZHome returns the head to its configured home bearing. SET.
+	CapPTZHome = "ptz.home"
+	// CapPTZPresetList enumerates stored presets: returns tokens and names
+	// so an agent can say "go to the loading bay" without knowing it is
+	// preset 7. GET.
+	CapPTZPresetList = "ptz.preset.list"
+	// CapPTZPresetSave stores the current bearing: Args {preset, name}. SET.
+	CapPTZPresetSave = "ptz.preset.save"
+	// CapPTZTour starts or stops a patrol: Args {tour, on}. SET.
+	CapPTZTour = "ptz.tour"
+
+	// CapLensFocus drives focus: Args {focus} in [-1,1] (negative near,
+	// positive far), or {auto: true} to hand it back to the camera. SET.
+	CapLensFocus = "lens.focus"
+	// CapImagingBrightness, and the three below it, are the imaging
+	// parameters ONVIF standardises. Args {value} in [0,1] normalised
+	// across vendor ranges. SET|GET.
+	CapImagingBrightness = "imaging.brightness"
+	CapImagingContrast   = "imaging.contrast"
+	CapImagingSaturation = "imaging.saturation"
+	CapImagingSharpness  = "imaging.sharpness"
+	// CapImagingIRCut controls the infrared cut filter — day/night mode.
+	// Args {mode: "on"|"off"|"auto"}. SET|GET. This is the one imaging
+	// control with a physical, observable consequence: the filter is a
+	// mechanical part that moves.
+	CapImagingIRCut = "imaging.ircut"
+
+	// CapSystemReboot restarts the device. SET.
+	//
+	// Deliberately its own capability rather than a flag on something else:
+	// rebooting a camera is disruptive and an agent should have to name it.
+	CapSystemReboot = "system.reboot"
+	// CapSystemInfo reports firmware, serial and uptime. GET.
+	CapSystemInfo = "system.info"
 
 	// CapEventMotion reports motion detection. STATE.
 	CapEventMotion = "event.motion"

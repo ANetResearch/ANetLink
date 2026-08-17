@@ -37,6 +37,9 @@ func runScan(rt *runtime.Runtime, writeTo string) error {
 		if f.Label != "" {
 			line += "  (" + f.Label + ")"
 		}
+		if f.VendorNote != "" {
+			line += "\n" + fmt.Sprintf("  %-24s → %s", "", f.VendorNote)
+		}
 		byProto[f.Protocol] = append(byProto[f.Protocol], line)
 		if f.ConfigHint != "" {
 			fragments[f.Protocol] = append(fragments[f.Protocol], json.RawMessage(f.ConfigHint))

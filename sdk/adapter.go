@@ -72,6 +72,15 @@ type Found struct {
 	Capabilities []string
 	// ConfigHint is a ready-to-paste JSON fragment for this device.
 	ConfigHint string
+	// Vendor is the manufacturer, when the adapter could identify one
+	// (fingerprint.IdentifyIP). Empty is ordinary — randomised MACs and
+	// off-segment hosts do not resolve — and must not be presented as
+	// "unknown vendor" to a user, only as absent.
+	Vendor string
+	// VendorNote explains what can be done about the device: which adapter
+	// drives it, or which ecosystem is not covered yet. This is where a scan
+	// stops being an address list and starts being actionable.
+	VendorNote string
 }
 
 // Discoverer is implemented by adapters that can enumerate their network

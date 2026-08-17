@@ -62,6 +62,21 @@ type fakeISAPI struct {
 	snapshot  []byte
 	rejectAll bool
 	alerts    []string // eventTypes to emit on the alert stream
+	// hasIRCut gates the image pipeline; ircut is day|night|auto.
+	hasIRCut bool
+	ircut    string
+	// presets is the store; presetCap caps it so the silent "store full"
+	// path can be exercised.
+	presets   []fakePreset
+	presetCap int
+	rebooted  bool
+	// absolute records the AbsoluteHigh bodies received.
+	absolute []string
+}
+
+type fakePreset struct {
+	id   int
+	name string
 }
 
 func newFakeISAPI(t *testing.T, opts ...func(*fakeISAPI)) *fakeISAPI {
@@ -133,14 +148,87 @@ func (f *fakeISAPI) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusOK)
 
+	case strings.HasSuffix(p, "/ircutFilter"):
+		if !f.hasIRCut {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if r.Method == http.MethodPut {
+			buf := make([]byte, r.ContentLength)
+			r.Body.Read(buf)
+			body := string(buf)
+			for _, m := range []string{"day", "night", "auto"} {
+				if strings.Contains(body, ">"+m+"<") {
+					f.ircut = m
+				}
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		fmt.Fprintf(w, `<?xml version="1.0"?><IrcutFilter><IrcutFilterType>%s</IrcutFilterType></IrcutFilter>`, f.ircut)
+
+	case strings.HasSuffix(p, "/absolute"):
+		buf := make([]byte, r.ContentLength)
+		r.Body.Read(buf)
+		body := string(buf)
+		f.absolute = append(f.absolute, body)
+		if !f.stubborn {
+			var el, az, zm int
+			fmt.Sscanf(body[strings.Index(body, "<elevation>"):],
+				"<elevation>%d</elevation><azimuth>%d</azimuth><absoluteZoom>%d</absoluteZoom>", &el, &az, &zm)
+			f.elev, f.azimuth, f.zoom = el, az, zm
+		}
+		w.WriteHeader(http.StatusOK)
+
+	case strings.HasSuffix(p, "/homeposition/goto"):
+		f.azimuth, f.elev = 0, 0
+		w.WriteHeader(http.StatusOK)
+
+	case strings.HasSuffix(p, "/presets"):
+		b := `<?xml version="1.0"?><PTZPresetList>`
+		for _, pr := range f.presets {
+			b += fmt.Sprintf(`<PTZPreset><id>%d</id><presetName>%s</presetName></PTZPreset>`, pr.id, pr.name)
+		}
+		fmt.Fprint(w, b+`</PTZPresetList>`)
+
+	// Recall must be matched before the generic preset PUT below, or a
+	// /presets/3/goto is parsed as a preset write with an empty body.
+	case strings.Contains(p, "/presets/") && strings.HasSuffix(p, "/goto"):
+		f.azimuth, f.elev, f.zoom = 1800, 450, 40
+		w.WriteHeader(http.StatusOK)
+
+	case strings.Contains(p, "/presets/") && r.Method == http.MethodPut:
+		buf := make([]byte, r.ContentLength)
+		r.Body.Read(buf)
+		body := string(buf)
+		var id int
+		name := ""
+		idAt := strings.Index(body, "<id>")
+		if idAt < 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		fmt.Sscanf(body[idAt:], "<id>%d</id>", &id)
+		if i := strings.Index(body, "<presetName>"); i >= 0 {
+			rest := body[i+len("<presetName>"):]
+			if j := strings.Index(rest, "<"); j > 0 {
+				name = rest[:j]
+			}
+		}
+		// A full store accepts the write and keeps nothing.
+		if f.presetCap == 0 || len(f.presets) < f.presetCap {
+			f.presets = append(f.presets, fakePreset{id: id, name: name})
+		}
+		w.WriteHeader(http.StatusOK)
+
+	case p == "/ISAPI/System/reboot":
+		f.rebooted = true
+		w.WriteHeader(http.StatusOK)
+
 	case strings.HasSuffix(p, "/status"):
 		fmt.Fprintf(w, `<?xml version="1.0"?><PTZStatus><AbsoluteHigh>`+
 			`<elevation>%d</elevation><azimuth>%d</azimuth><absoluteZoom>%d</absoluteZoom>`+
 			`</AbsoluteHigh></PTZStatus>`, f.elev, f.azimuth, f.zoom)
-
-	case strings.Contains(p, "/presets/") && strings.HasSuffix(p, "/goto"):
-		f.azimuth, f.elev, f.zoom = 1800, 450, 40
-		w.WriteHeader(http.StatusOK)
 
 	default:
 		w.WriteHeader(http.StatusNotFound)
@@ -174,6 +262,7 @@ func (f *fakeISAPI) serveAlerts(w http.ResponseWriter, alerts []string) {
 }
 
 func withPTZ(f *fakeISAPI)      { f.hasPTZ = true }
+func withIRCut(f *fakeISAPI)    { f.hasIRCut = true; f.ircut = "auto" }
 func withStubborn(f *fakeISAPI) { f.hasPTZ = true; f.stubborn = true }
 
 func startAdapter(t *testing.T, cam *fakeISAPI, mut ...func(*Config)) (*Adapter, *memSink) {
@@ -503,5 +592,241 @@ func TestStopCutsTheAlertStream(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Stop must cancel the alert stream, not wait for a feed that never ends")
+	}
+}
+
+// --- extended control surface ---
+
+// TestAbsoluteMapsToISAPICoordinates: our contract is [-1,1] on all three
+// axes; ISAPI wants azimuth in tenths of a degree (0..3600) and elevation
+// -900..900. The caller must never see that.
+func TestAbsoluteMapsToISAPICoordinates(t *testing.T) {
+	for _, tc := range []struct {
+		pan, tilt float64
+		wantAz    int
+		wantElev  int
+	}{
+		{-1, 0, 0, 0},   // -1 is the origin of the circle
+		{0, 0, 1800, 0}, // straight round the back
+		{0.5, 0.5, 2700, 450},
+		{0, -1, 1800, -900}, // full down
+	} {
+		cam := newFakeISAPI(t, withPTZ)
+		a, _ := startAdapter(t, cam)
+		if _, err := a.Invoke(context.Background(), sdk.Call{
+			DeviceID: "hik-1", Capability: profile.CapPTZAbsolute,
+			Args: map[string]any{"pan": tc.pan, "tilt": tc.tilt, "zoom": 0.1}}); err != nil {
+			t.Fatal(err)
+		}
+		cam.mu.Lock()
+		got := append([]string(nil), cam.absolute...)
+		cam.mu.Unlock()
+		if len(got) != 1 {
+			t.Fatalf("pan=%g tilt=%g: expected one absolute write, got %v", tc.pan, tc.tilt, got)
+		}
+		wantAz := fmt.Sprintf("<azimuth>%d</azimuth>", tc.wantAz)
+		wantEl := fmt.Sprintf("<elevation>%d</elevation>", tc.wantElev)
+		if !strings.Contains(got[0], wantAz) || !strings.Contains(got[0], wantEl) {
+			t.Fatalf("pan=%g tilt=%g: want %s and %s, got %s", tc.pan, tc.tilt, wantAz, wantEl, got[0])
+		}
+	}
+}
+
+func TestAbsoluteRoundTripsThroughTheContract(t *testing.T) {
+	cam := newFakeISAPI(t, withPTZ)
+	a, _ := startAdapter(t, cam)
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "hik-1", Capability: profile.CapPTZAbsolute,
+		Args: map[string]any{"pan": 0.5, "tilt": 0.5}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.Verifiable() {
+		t.Fatalf("arriving verifies: %+v", eff)
+	}
+	// Both the vendor units and the normalised contract values are reported.
+	if eff.Record.Metrics["azimuth"] != 2700 {
+		t.Fatalf("native azimuth: %+v", eff.Record.Metrics)
+	}
+	if p := eff.Record.Metrics["pan"]; p < 0.49 || p > 0.51 {
+		t.Fatalf("the normalised pan must round-trip, got %g", p)
+	}
+}
+
+func TestAbsoluteThatDidNotArriveIsUnverified(t *testing.T) {
+	cam := newFakeISAPI(t, withStubborn)
+	a, _ := startAdapter(t, cam)
+	eff, _ := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "hik-1", Capability: profile.CapPTZAbsolute,
+		Args: map[string]any{"pan": 0.9, "tilt": 0.9}})
+	if eff.Status == effect.OK {
+		t.Fatalf("a head that never arrived is not a success: %+v", eff)
+	}
+	if !strings.Contains(eff.Evidence.ObservedState, "did not arrive") {
+		t.Fatalf("the reason must say so: %q", eff.Evidence.ObservedState)
+	}
+}
+
+func TestAbsoluteHoldsUnspecifiedAxes(t *testing.T) {
+	cam := newFakeISAPI(t, withPTZ)
+	a, _ := startAdapter(t, cam)
+	cam.mu.Lock()
+	cam.azimuth, cam.elev = 1234, 321
+	cam.mu.Unlock()
+
+	if _, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "hik-1", Capability: profile.CapPTZAbsolute,
+		Args: map[string]any{"zoom": 0.5}}); err != nil {
+		t.Fatal(err)
+	}
+	cam.mu.Lock()
+	az, el := cam.azimuth, cam.elev
+	cam.mu.Unlock()
+	if az != 1234 || el != 321 {
+		t.Fatalf("a zoom-only request re-aimed the camera to az=%d el=%d", az, el)
+	}
+}
+
+// TestIRCutNamingIsVendorSpecific: ISAPI names the *mode* (day/night) while
+// ONVIF names the *filter* (ON/OFF). Same physical state, opposite words —
+// mapping them identically would flip every Hikvision camera.
+func TestIRCutNamingIsVendorSpecific(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"on", "day"}, {"day", "day"},
+		{"off", "night"}, {"night", "night"},
+		{"auto", "auto"},
+	} {
+		got, ok := ircutMode(tc.in)
+		if !ok || got != tc.want {
+			t.Fatalf("ircut %q → %q (ok=%v), want %q", tc.in, got, ok, tc.want)
+		}
+	}
+	if _, ok := ircutMode("dusk"); ok {
+		t.Fatal("an unknown mode must be refused, not guessed")
+	}
+
+	cam := newFakeISAPI(t, withIRCut)
+	a, _ := startAdapter(t, cam)
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "hik-1", Capability: profile.CapImagingIRCut,
+		Args: map[string]any{"mode": "night"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.Verifiable() {
+		t.Fatalf("the filter position is readable, so this verifies: %+v", eff)
+	}
+	cam.mu.Lock()
+	got := cam.ircut
+	cam.mu.Unlock()
+	if got != "night" {
+		t.Fatalf("ISAPI expects the mode name, camera got %q", got)
+	}
+}
+
+func TestIRCutIsDiscoveredNotAssumed(t *testing.T) {
+	plain := newFakeISAPI(t)
+	_, sink := startAdapter(t, plain)
+	d, _ := sink.get("hik-1")
+	if _, ok := d.Profile.Find(profile.CapImagingIRCut); ok {
+		t.Fatal("a camera with no ircutFilter endpoint must not claim imaging.ircut")
+	}
+}
+
+func TestPresetListCarriesNames(t *testing.T) {
+	cam := newFakeISAPI(t, withPTZ)
+	cam.mu.Lock()
+	cam.presets = []fakePreset{{1, "front door"}, {2, "loading bay"}}
+	cam.mu.Unlock()
+	a, _ := startAdapter(t, cam)
+
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "hik-1", Capability: profile.CapPTZPresetList})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.Verifiable() || eff.Record.Metrics["preset_count"] != 2 {
+		t.Fatalf("preset list: %+v", eff)
+	}
+	if len(eff.Record.Artifacts) != 1 || eff.Record.Artifacts[0].MediaType != "application/json" {
+		t.Fatalf("names must ride as a JSON artifact: %+v", eff.Record)
+	}
+}
+
+func TestPresetSaveVerifiedByReadback(t *testing.T) {
+	cam := newFakeISAPI(t, withPTZ)
+	a, _ := startAdapter(t, cam)
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "hik-1", Capability: profile.CapPTZPresetSave,
+		Args: map[string]any{"preset": 4.0, "name": "loading bay"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.Verifiable() {
+		t.Fatalf("a preset that shows up in the list verifies: %+v", eff)
+	}
+	for _, bad := range []map[string]any{{}, {"preset": 0.0}, {"preset": "abc"}} {
+		eff, _ := a.Invoke(context.Background(), sdk.Call{
+			DeviceID: "hik-1", Capability: profile.CapPTZPresetSave, Args: bad})
+		if eff.Status != effect.Failed {
+			t.Fatalf("args %v must be refused: %+v", bad, eff)
+		}
+	}
+}
+
+func TestPresetSaveIntoAFullStoreFails(t *testing.T) {
+	cam := newFakeISAPI(t, withPTZ)
+	cam.mu.Lock()
+	cam.presetCap = 1
+	cam.presets = []fakePreset{{1, "taken"}}
+	cam.mu.Unlock()
+	a, _ := startAdapter(t, cam)
+
+	eff, _ := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "hik-1", Capability: profile.CapPTZPresetSave,
+		Args: map[string]any{"preset": 9.0, "name": "nowhere"}})
+	if eff.Status != effect.Failed {
+		t.Fatalf("a preset the camera did not keep must fail: %+v", eff)
+	}
+}
+
+func TestRebootCannotBeVerified(t *testing.T) {
+	cam := newFakeISAPI(t)
+	a, _ := startAdapter(t, cam)
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "hik-1", Capability: profile.CapSystemReboot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eff.Status != effect.Unverified {
+		t.Fatalf("a reboot cannot be verified from here: %+v", eff)
+	}
+	cam.mu.Lock()
+	rebooted := cam.rebooted
+	cam.mu.Unlock()
+	if !rebooted {
+		t.Fatal("the reboot must actually have been sent")
+	}
+}
+
+func TestSystemInfoIsReported(t *testing.T) {
+	cam := newFakeISAPI(t)
+	a, _ := startAdapter(t, cam)
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "hik-1", Capability: profile.CapSystemInfo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.Verifiable() || len(eff.Record.Artifacts) != 1 {
+		t.Fatalf("system.info: %+v", eff)
+	}
+	if !strings.Contains(eff.Evidence.ObservedState, "DS-2CD2143G0-I") {
+		t.Fatalf("evidence should name the model: %q", eff.Evidence.ObservedState)
+	}
+}
+
+func TestPresetNameIsEscaped(t *testing.T) {
+	if got := xmlEscape("R&D"); !strings.Contains(got, "&amp;") {
+		t.Fatalf("ampersands in operator-supplied names must be escaped: %q", got)
 	}
 }

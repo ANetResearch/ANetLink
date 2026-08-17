@@ -75,7 +75,21 @@ type fakeCam struct {
 	snapshot  []byte
 	streamURI string
 	events    []string // topics to emit on the next PullMessages
+
+	// imaging: hasImaging gates the service; the vendor range is
+	// deliberately NOT [0,1] so the normalisation is actually exercised.
+	hasImaging bool
+	brightness float64 // native units, 0..255
+	ircut      string  // "ON" | "OFF" | "AUTO"
+	// presets is the camera's preset store; presetCap caps it so the
+	// "store full" path can be exercised.
+	presets   []fakePreset
+	presetCap int
+	rebooted  bool
+	tours     []string
 }
+
+type fakePreset struct{ token, name string }
 
 func soapOK(body string) string {
 	return `<?xml version="1.0"?><s:Envelope xmlns:s="` + nsSOAP + `"><s:Body>` + body + `</s:Body></s:Envelope>`
@@ -160,6 +174,9 @@ func (c *fakeCam) handleSOAP(w http.ResponseWriter, r *http.Request) {
 		if c.hasEvent {
 			b += `<tt:Events><tt:XAddr>` + c.srv.URL + `/onvif/device_service</tt:XAddr></tt:Events>`
 		}
+		if c.hasImaging {
+			b += `<tt:Imaging><tt:XAddr>` + c.srv.URL + `/onvif/device_service</tt:XAddr></tt:Imaging>`
+		}
 		fmt.Fprint(w, soapOK(b+`</tds:Capabilities></tds:GetCapabilitiesResponse>`))
 
 	case has("GetProfiles"):
@@ -180,6 +197,11 @@ func (c *fakeCam) handleSOAP(w http.ResponseWriter, r *http.Request) {
 	case has("GetSnapshotUri"):
 		fmt.Fprint(w, soapOK(`<trt:GetSnapshotUriResponse><trt:MediaUri><tt:Uri>`+
 			c.srv.URL+`/onvif/snapshot</tt:Uri></trt:MediaUri></trt:GetSnapshotUriResponse>`))
+
+	case has("timg:Move"):
+		// The imaging service's focus drive. Distinct from the PTZ moves
+		// below, which is why it is matched on its namespace prefix.
+		fmt.Fprint(w, soapOK(`<timg:MoveResponse/>`))
 
 	case has("ContinuousMove"):
 		if !c.stubborn {
@@ -209,6 +231,84 @@ func (c *fakeCam) handleSOAP(w http.ResponseWriter, r *http.Request) {
 				`<tt:MoveStatus><tt:PanTilt>%s</tt:PanTilt><tt:Zoom>%s</tt:Zoom></tt:MoveStatus>`+
 				`</tptz:PTZStatus></tptz:GetStatusResponse>`, c.pan, c.tilt, c.zoom, state, state)))
 
+	case has("GetVideoSources"):
+		fmt.Fprint(w, soapOK(`<trt:GetVideoSourcesResponse>`+
+			`<trt:VideoSources token="VideoSource_1"/></trt:GetVideoSourcesResponse>`))
+
+	case has("GetOptions"):
+		// A vendor range of 0..255 — nothing like the [0,1] contract.
+		fmt.Fprint(w, soapOK(`<timg:GetOptionsResponse><timg:ImagingOptions>`+
+			`<tt:Brightness><tt:Min>0</tt:Min><tt:Max>255</tt:Max></tt:Brightness>`+
+			`<tt:Contrast><tt:Min>0</tt:Min><tt:Max>255</tt:Max></tt:Contrast>`+
+			`</timg:ImagingOptions></timg:GetOptionsResponse>`))
+
+	case has("SetImagingSettings"):
+		if i := strings.Index(req, "<tt:Brightness>"); i >= 0 {
+			var v float64
+			fmt.Sscanf(req[i+len("<tt:Brightness>"):], "%g", &v)
+			c.brightness = v
+		}
+		if i := strings.Index(req, "<tt:IrCutFilter>"); i >= 0 {
+			rest := req[i+len("<tt:IrCutFilter>"):]
+			if j := strings.Index(rest, "<"); j > 0 {
+				c.ircut = rest[:j]
+			}
+		}
+		fmt.Fprint(w, soapOK(`<timg:SetImagingSettingsResponse/>`))
+
+	case has("GetImagingSettings"):
+		fmt.Fprint(w, soapOK(fmt.Sprintf(
+			`<timg:GetImagingSettingsResponse><timg:ImagingSettings>`+
+				`<tt:Brightness>%g</tt:Brightness><tt:IrCutFilter>%s</tt:IrCutFilter>`+
+				`</timg:ImagingSettings></timg:GetImagingSettingsResponse>`, c.brightness, c.ircut)))
+
+	case has("AbsoluteMove"):
+		// Parse the requested position out of the attributes.
+		if i := strings.Index(req, `<tt:PanTilt x="`); i >= 0 {
+			var x, y float64
+			fmt.Sscanf(req[i:], `<tt:PanTilt x="%g" y="%g"`, &x, &y)
+			if !c.stubborn {
+				c.pan, c.tilt = x, y
+			}
+		}
+		fmt.Fprint(w, soapOK(`<tptz:AbsoluteMoveResponse/>`))
+
+	case has("GotoHomePosition"):
+		c.pan, c.tilt, c.zoom = 0, 0, 0
+		fmt.Fprint(w, soapOK(`<tptz:GotoHomePositionResponse/>`))
+
+	case has("GetPresets"):
+		b := `<tptz:GetPresetsResponse>`
+		for _, p := range c.presets {
+			b += fmt.Sprintf(`<tptz:Preset token="%s"><tt:Name>%s</tt:Name></tptz:Preset>`, p.token, p.name)
+		}
+		fmt.Fprint(w, soapOK(b+`</tptz:GetPresetsResponse>`))
+
+	case has("SetPreset"):
+		name := ""
+		if i := strings.Index(req, "<tptz:PresetName>"); i >= 0 {
+			rest := req[i+len("<tptz:PresetName>"):]
+			if j := strings.Index(rest, "<"); j > 0 {
+				name = rest[:j]
+			}
+		}
+		tok := fmt.Sprintf("P%d", len(c.presets)+1)
+		// A full store accepts the command and keeps nothing — the exact
+		// silent failure the adapter has to catch.
+		if c.presetCap == 0 || len(c.presets) < c.presetCap {
+			c.presets = append(c.presets, fakePreset{token: tok, name: name})
+		}
+		fmt.Fprint(w, soapOK(`<tptz:SetPresetResponse><tptz:PresetToken>`+tok+
+			`</tptz:PresetToken></tptz:SetPresetResponse>`))
+
+	case has("OperatePresetTour"):
+		c.tours = append(c.tours, req)
+		fmt.Fprint(w, soapOK(`<tptz:OperatePresetTourResponse/>`))
+
+	case has("SystemReboot"):
+		c.rebooted = true
+		fmt.Fprint(w, soapOK(`<tds:SystemRebootResponse><tds:Message>Rebooting in 5s</tds:Message></tds:SystemRebootResponse>`))
+
 	case has("CreatePullPointSubscription"):
 		fmt.Fprint(w, soapOK(`<tev:CreatePullPointSubscriptionResponse><tev:SubscriptionReference>`+
 			`<wsa:Address>`+c.srv.URL+`/onvif/device_service</wsa:Address>`+
@@ -232,6 +332,7 @@ func (c *fakeCam) handleSOAP(w http.ResponseWriter, r *http.Request) {
 }
 
 func withNoClock(c *fakeCam)  { c.noClock = true }
+func withImaging(c *fakeCam)  { c.hasImaging = true; c.brightness = 128; c.ircut = "AUTO" }
 func withPTZ(c *fakeCam)      { c.hasPTZ = true }
 func withEvents(c *fakeCam)   { c.hasEvent = true }
 func withStubborn(c *fakeCam) { c.stubborn = true; c.hasPTZ = true }
@@ -872,5 +973,364 @@ func TestSOAPFaultClassification(t *testing.T) {
 	}
 	if !strings.Contains(authErr.Error(), "Sender not authorized") {
 		t.Fatalf("the camera's own reason must survive: %s", authErr.Error())
+	}
+}
+
+// --- extended control surface ---
+
+// TestImagingNormalisesVendorRange: the ANetLink contract is [0,1] and this
+// camera's brightness runs 0..255. A caller asking for half brightness must
+// not have to know whose sensor it is.
+func TestImagingNormalisesVendorRange(t *testing.T) {
+	cam := newFakeCam(t, withImaging)
+	a, sink := startAdapter(t, cam)
+
+	d, _ := sink.get("cam-1")
+	if _, ok := d.Profile.Find(profile.CapImagingBrightness); !ok {
+		t.Fatal("a camera reporting a brightness range must expose imaging.brightness")
+	}
+	// The camera reported no saturation range, so it must not be claimed.
+	if _, ok := d.Profile.Find(profile.CapImagingSaturation); ok {
+		t.Fatal("a parameter with no reported range must not be advertised")
+	}
+
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapImagingBrightness,
+		Args: map[string]any{"value": 0.5}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.Verifiable() {
+		t.Fatalf("a readback that matches the request verifies: %+v", eff)
+	}
+	cam.mu.Lock()
+	native := cam.brightness
+	cam.mu.Unlock()
+	if native < 126 || native > 130 {
+		t.Fatalf("0.5 of a 0..255 range should reach the camera as ~127.5, got %g", native)
+	}
+	if v := eff.Record.Metrics["imaging_brightness"]; v < 0.45 || v > 0.55 {
+		t.Fatalf("the readback must come back normalised, got %g", v)
+	}
+}
+
+func TestImagingRejectsOutOfRange(t *testing.T) {
+	cam := newFakeCam(t, withImaging)
+	a, _ := startAdapter(t, cam)
+	for _, v := range []float64{1.5, -0.2} {
+		eff, _ := a.Invoke(context.Background(), sdk.Call{
+			DeviceID: "cam-1", Capability: profile.CapImagingBrightness,
+			Args: map[string]any{"value": v}})
+		if eff.Status != effect.Failed {
+			t.Fatalf("value %g is outside [0,1] and must be refused: %+v", v, eff)
+		}
+	}
+}
+
+// TestIRCutSemanticsAreNotInverted guards the trap in ONVIF's naming: the
+// setting names the *filter*, not the night mode. ON means the IR-cut filter
+// is engaged, which is DAY. Getting this backwards flips every camera.
+func TestIRCutSemanticsAreNotInverted(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"on", "ON"}, {"day", "ON"},
+		{"off", "OFF"}, {"night", "OFF"},
+		{"auto", "AUTO"}, {"AUTO", "AUTO"},
+	} {
+		got, ok := ircutMode(tc.in)
+		if !ok || got != tc.want {
+			t.Fatalf("ircut %q → %q (ok=%v), want %q", tc.in, got, ok, tc.want)
+		}
+	}
+	if _, ok := ircutMode("sometimes"); ok {
+		t.Fatal("an unknown ircut mode must be refused, not guessed")
+	}
+
+	cam := newFakeCam(t, withImaging)
+	a, _ := startAdapter(t, cam)
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapImagingIRCut,
+		Args: map[string]any{"mode": "night"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.Verifiable() {
+		t.Fatalf("the filter position is readable, so this verifies: %+v", eff)
+	}
+	cam.mu.Lock()
+	got := cam.ircut
+	cam.mu.Unlock()
+	if got != "OFF" {
+		t.Fatalf("night mode means the IR-cut filter comes OUT (OFF), camera got %q", got)
+	}
+
+	eff, _ = a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapImagingIRCut,
+		Args: map[string]any{"mode": "upside-down"}})
+	if eff.Status != effect.Failed {
+		t.Fatalf("an unknown mode must fail: %+v", eff)
+	}
+}
+
+// TestAbsoluteMoveVerifiesArrival: absolute positioning is the one PTZ
+// operation where "did it get there" has a real answer.
+func TestAbsoluteMoveVerifiesArrival(t *testing.T) {
+	cam := newFakeCam(t, withPTZ)
+	a, _ := startAdapter(t, cam)
+
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapPTZAbsolute,
+		Args: map[string]any{"pan": 0.6, "tilt": -0.2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.Verifiable() {
+		t.Fatalf("arriving at the requested bearing verifies: %+v", eff)
+	}
+	if eff.Record.Metrics["pan"] != 0.6 {
+		t.Fatalf("position: %+v", eff.Record.Metrics)
+	}
+	if !strings.Contains(eff.Evidence.ObservedState, "arrived") {
+		t.Fatalf("evidence should say it arrived: %q", eff.Evidence.ObservedState)
+	}
+}
+
+// TestAbsoluteMoveThatDidNotArriveIsUnverified: a camera that accepts the
+// command and stays put must not be reported as having moved.
+func TestAbsoluteMoveThatDidNotArriveIsUnverified(t *testing.T) {
+	cam := newFakeCam(t, withStubborn)
+	a, _ := startAdapter(t, cam)
+	eff, _ := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapPTZAbsolute,
+		Args: map[string]any{"pan": 0.9, "tilt": 0.9}})
+	if eff.Status == effect.OK {
+		t.Fatalf("a head that never arrived is not a success: %+v", eff)
+	}
+	if !strings.Contains(eff.Evidence.ObservedState, "did not arrive") {
+		t.Fatalf("the reason must say so: %q", eff.Evidence.ObservedState)
+	}
+}
+
+// TestAbsoluteHoldsUnspecifiedAxes: asking to zoom must not also re-aim the
+// camera, which is what sending zero for the omitted axes would do.
+func TestAbsoluteHoldsUnspecifiedAxes(t *testing.T) {
+	cam := newFakeCam(t, withPTZ)
+	a, _ := startAdapter(t, cam)
+	cam.mu.Lock()
+	cam.pan, cam.tilt = 0.4, 0.3
+	cam.mu.Unlock()
+
+	if _, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapPTZAbsolute,
+		Args: map[string]any{"zoom": 0.8}}); err != nil {
+		t.Fatal(err)
+	}
+	cam.mu.Lock()
+	pan, tilt := cam.pan, cam.tilt
+	cam.mu.Unlock()
+	if pan != 0.4 || tilt != 0.3 {
+		t.Fatalf("a zoom-only request re-aimed the camera to pan=%g tilt=%g", pan, tilt)
+	}
+}
+
+func TestAbsoluteRejectsOutOfRange(t *testing.T) {
+	cam := newFakeCam(t, withPTZ)
+	a, _ := startAdapter(t, cam)
+	eff, _ := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapPTZAbsolute,
+		Args: map[string]any{"pan": 2.0}})
+	if eff.Status != effect.Failed {
+		t.Fatalf("out-of-range absolute position must be refused: %+v", eff)
+	}
+	eff, _ = a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapPTZAbsolute, Args: map[string]any{}})
+	if eff.Status != effect.Failed {
+		t.Fatal("an absolute move with no axis must be refused")
+	}
+}
+
+// TestPresetListCarriesNames: an agent should be able to act on "the loading
+// bay" without anyone telling it that is preset 7.
+func TestPresetListCarriesNames(t *testing.T) {
+	cam := newFakeCam(t, withPTZ)
+	cam.mu.Lock()
+	cam.presets = []fakePreset{{"P1", "front door"}, {"P2", "loading bay"}}
+	cam.mu.Unlock()
+	a, _ := startAdapter(t, cam)
+
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapPTZPresetList})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.Verifiable() || eff.Record.Metrics["preset_count"] != 2 {
+		t.Fatalf("preset list: %+v", eff)
+	}
+	if len(eff.Record.Artifacts) != 1 {
+		t.Fatalf("the names must ride as an artifact: %+v", eff.Record)
+	}
+	art := eff.Record.Artifacts[0]
+	if art.MediaType != "application/json" || art.ContentCID == "" {
+		t.Fatalf("preset artifact: %+v", art)
+	}
+}
+
+func TestPresetSaveVerifiedByReadback(t *testing.T) {
+	cam := newFakeCam(t, withPTZ)
+	a, _ := startAdapter(t, cam)
+
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapPTZPresetSave,
+		Args: map[string]any{"name": "loading bay"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.Verifiable() {
+		t.Fatalf("a preset that appears in the list afterwards verifies: %+v", eff)
+	}
+
+	eff, _ = a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapPTZPresetSave, Args: map[string]any{}})
+	if eff.Status != effect.Failed {
+		t.Fatal("a save with neither name nor token must be refused")
+	}
+}
+
+// TestPresetSaveIntoAFullStoreFails is the silent failure this readback
+// exists to catch: the camera accepts SetPreset and keeps nothing.
+func TestPresetSaveIntoAFullStoreFails(t *testing.T) {
+	cam := newFakeCam(t, withPTZ)
+	cam.mu.Lock()
+	cam.presetCap = 1
+	cam.presets = []fakePreset{{"P1", "taken"}}
+	cam.mu.Unlock()
+	a, _ := startAdapter(t, cam)
+
+	eff, _ := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapPTZPresetSave,
+		Args: map[string]any{"name": "nowhere to go"}})
+	if eff.Status != effect.Failed {
+		t.Fatalf("a preset the camera did not actually keep must fail: %+v", eff)
+	}
+	if !strings.Contains(eff.Message, "full") {
+		t.Fatalf("the message should point at the real cause: %q", eff.Message)
+	}
+}
+
+// TestPresetNameIsEscaped: preset names come from humans and routinely
+// contain ampersands, which would otherwise break the SOAP body.
+func TestPresetNameIsEscaped(t *testing.T) {
+	if got := xmlEscape(`R&D <lab> "north"`); strings.ContainsAny(got, "<>&\"") &&
+		!strings.Contains(got, "&amp;") {
+		t.Fatalf("escaping failed: %q", got)
+	}
+	if got := xmlEscape("R&D"); got != "R&amp;D" {
+		t.Fatalf("escape: %q", got)
+	}
+}
+
+// TestRebootCannotBeVerified: the camera is on its way down, so nothing here
+// can confirm it. Reporting OK because the request was accepted is exactly
+// the confusion the effect model exists to prevent.
+func TestRebootCannotBeVerified(t *testing.T) {
+	cam := newFakeCam(t)
+	a, _ := startAdapter(t, cam)
+
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapSystemReboot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eff.Status != effect.Unverified {
+		t.Fatalf("a reboot cannot be verified from here: %+v", eff)
+	}
+	cam.mu.Lock()
+	rebooted := cam.rebooted
+	cam.mu.Unlock()
+	if !rebooted {
+		t.Fatal("the reboot must actually have been sent")
+	}
+}
+
+func TestSystemInfoIsReported(t *testing.T) {
+	cam := newFakeCam(t)
+	a, _ := startAdapter(t, cam)
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapSystemInfo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.Verifiable() || len(eff.Record.Artifacts) != 1 {
+		t.Fatalf("system.info: %+v", eff)
+	}
+	if !strings.Contains(eff.Evidence.ObservedState, "IPC-9000") {
+		t.Fatalf("evidence should name the model: %q", eff.Evidence.ObservedState)
+	}
+}
+
+// TestTourIsHonestlyUnverified: ONVIF exposes no tour state, so a started
+// tour is an acknowledgement and nothing more.
+func TestTourIsHonestlyUnverified(t *testing.T) {
+	cam := newFakeCam(t, withPTZ)
+	a, _ := startAdapter(t, cam)
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapPTZTour,
+		Args: map[string]any{"tour": "1", "on": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eff.Status != effect.Unverified {
+		t.Fatalf("no tour state exists to verify against: %+v", eff)
+	}
+	cam.mu.Lock()
+	n := len(cam.tours)
+	cam.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("the tour command must have been sent, saw %d", n)
+	}
+}
+
+// TestFocusRequiresManualFirst: a continuous focus move on a lens still in
+// autofocus is fought by the camera and silently undone.
+func TestFocusRequiresManualFirst(t *testing.T) {
+	cam := newFakeCam(t, withImaging)
+	a, _ := startAdapter(t, cam)
+
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapLensFocus,
+		Args: map[string]any{"focus": 0.5}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ONVIF gives no focus position, so this is honestly unverified.
+	if eff.Status != effect.Unverified {
+		t.Fatalf("focus has no position readback: %+v", eff)
+	}
+	eff, _ = a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "cam-1", Capability: profile.CapLensFocus, Args: map[string]any{}})
+	if eff.Status != effect.Failed {
+		t.Fatal("focus with neither a speed nor auto must be refused")
+	}
+}
+
+// TestFixedCameraDeclaresNoImagingOrPTZ keeps the overclaim rule holding as
+// the capability surface grows.
+func TestFixedCameraDeclaresNoImagingOrPTZ(t *testing.T) {
+	cam := newFakeCam(t)
+	_, sink := startAdapter(t, cam)
+	d, _ := sink.get("cam-1")
+	for _, id := range []string{
+		profile.CapPTZAbsolute, profile.CapPTZHome, profile.CapPTZPresetList,
+		profile.CapPTZPresetSave, profile.CapPTZTour, profile.CapLensFocus,
+		profile.CapImagingBrightness, profile.CapImagingIRCut,
+	} {
+		if _, ok := d.Profile.Find(id); ok {
+			t.Fatalf("a plain camera must not claim %s", id)
+		}
+	}
+	// …but every ONVIF device answers these.
+	for _, id := range []string{profile.CapSystemInfo, profile.CapSystemReboot} {
+		if _, ok := d.Profile.Find(id); !ok {
+			t.Fatalf("every ONVIF device exposes %s", id)
+		}
 	}
 }

@@ -2,9 +2,12 @@ package dahua
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -61,6 +64,13 @@ type fakeDahua struct {
 	snapshot  []byte
 	refuseCmd bool
 	events    []string // "Code=X;action=Start;index=0" lines
+	presets   []fakePreset
+	rebooted  bool
+}
+
+type fakePreset struct {
+	index int
+	name  string
 }
 
 func newFakeDahua(t *testing.T, opts ...func(*fakeDahua)) *fakeDahua {
@@ -97,11 +107,19 @@ func (f *fakeDahua) handle(w http.ResponseWriter, r *http.Request) {
 
 	switch r.URL.Path {
 	case "/cgi-bin/magicBox.cgi":
-		if action == "getDeviceType" {
+		switch action {
+		case "getDeviceType":
 			fmt.Fprint(w, "type=IPC-HFW4431R-Z\r\n")
-			return
+		case "getSerialNo":
+			fmt.Fprint(w, "sn=DH123456\r\n")
+		case "getSoftwareVersion":
+			fmt.Fprint(w, "version=2.800.0000\r\n")
+		case "reboot":
+			f.rebooted = true
+			fmt.Fprint(w, "OK")
+		default:
+			w.WriteHeader(http.StatusBadRequest)
 		}
-		w.WriteHeader(http.StatusBadRequest)
 
 	case "/cgi-bin/snapshot.cgi":
 		w.Header().Set("Content-Type", "image/jpeg")
@@ -120,6 +138,14 @@ func (f *fakeDahua) handle(w http.ResponseWriter, r *http.Request) {
 			// Note the vendor's misspelling: "Postion". Every firmware has it.
 			fmt.Fprintf(w, "status.Postion[0]=%g\r\nstatus.Postion[1]=%g\r\nstatus.Postion[2]=%g\r\n"+
 				"status.ActionState=Idle\r\n", f.pan, f.tilt, f.zoom)
+		case "getPresets":
+			for i, pr := range f.presets {
+				fmt.Fprintf(w, "table.Preset[%d].Index=%d\r\ntable.Preset[%d].Name=%s\r\n",
+					i, pr.index, i, pr.name)
+			}
+			if len(f.presets) == 0 {
+				fmt.Fprint(w, "table.Preset[0].Index=0\r\n")
+			}
 		case "start", "stop":
 			f.cmds = append(f.cmds, r.URL.RawQuery)
 			if f.refuseCmd {
@@ -130,6 +156,16 @@ func (f *fakeDahua) handle(w http.ResponseWriter, r *http.Request) {
 				switch q.Get("code") {
 				case "GotoPreset":
 					f.pan, f.tilt, f.zoom = 180, 45, 4
+				case "SetPreset":
+					n, _ := strconv.Atoi(q.Get("arg2"))
+					f.presets = append(f.presets, fakePreset{index: n, name: fmt.Sprintf("preset %d", n)})
+				case "PositionABS":
+					// Dahua takes degrees here, not the speed codes the
+					// continuous API uses.
+					p, _ := strconv.ParseFloat(q.Get("arg1"), 64)
+					t, _ := strconv.ParseFloat(q.Get("arg2"), 64)
+					z, _ := strconv.ParseFloat(q.Get("arg3"), 64)
+					f.pan, f.tilt, f.zoom = p, t, z
 				default:
 					f.pan += 1
 					f.tilt += 1
@@ -524,5 +560,225 @@ func TestProbeReportsUnreachable(t *testing.T) {
 		Timeout: 300 * time.Millisecond}}.Probe(context.Background())
 	if av.Available || !strings.Contains(av.Detail, "unreachable") {
 		t.Fatalf("unreachable camera: %+v", av)
+	}
+}
+
+// --- extended control surface ---
+
+// TestAbsoluteSendsDegreesNotSpeedCodes: PositionABS takes degrees, while
+// the continuous API next door takes a compass code and a 1..8 speed. Using
+// the wrong units here points the camera somewhere arbitrary.
+func TestAbsoluteSendsDegreesNotSpeedCodes(t *testing.T) {
+	cam := newFakeDahua(t, withPTZ)
+	a, _ := startAdapter(t, cam)
+
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "dh-1", Capability: profile.CapPTZAbsolute,
+		Args: map[string]any{"pan": 0, "tilt": 0.5, "zoom": 0.1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cam.mu.Lock()
+	cmds := append([]string(nil), cam.cmds...)
+	cam.mu.Unlock()
+	if len(cmds) == 0 || !strings.Contains(cmds[0], "code=PositionABS") {
+		t.Fatalf("absolute must use PositionABS: %v", cmds)
+	}
+	// pan 0 → 180°, tilt 0.5 → 45°
+	if !strings.Contains(cmds[0], "arg1=180.0") || !strings.Contains(cmds[0], "arg2=45.0") {
+		t.Fatalf("degree conversion wrong: %s", cmds[0])
+	}
+	if !eff.Verifiable() {
+		t.Fatalf("arriving verifies: %+v", eff)
+	}
+	if p := eff.Record.Metrics["pan"]; p < -0.01 || p > 0.01 {
+		t.Fatalf("the normalised pan must round-trip to ~0, got %g", p)
+	}
+}
+
+func TestAbsoluteHoldsUnspecifiedAxes(t *testing.T) {
+	cam := newFakeDahua(t, withPTZ)
+	a, _ := startAdapter(t, cam)
+	cam.mu.Lock()
+	cam.pan, cam.tilt = 90, 30
+	cam.mu.Unlock()
+
+	if _, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "dh-1", Capability: profile.CapPTZAbsolute,
+		Args: map[string]any{"zoom": 0.5}}); err != nil {
+		t.Fatal(err)
+	}
+	cam.mu.Lock()
+	pan, tilt := cam.pan, cam.tilt
+	cam.mu.Unlock()
+	if pan != 90 || tilt != 30 {
+		t.Fatalf("a zoom-only request re-aimed the camera to %g/%g", pan, tilt)
+	}
+}
+
+func TestAbsoluteRejectsOutOfRange(t *testing.T) {
+	cam := newFakeDahua(t, withPTZ)
+	a, _ := startAdapter(t, cam)
+	eff, _ := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "dh-1", Capability: profile.CapPTZAbsolute, Args: map[string]any{"pan": 2.0}})
+	if eff.Status != effect.Failed {
+		t.Fatalf("out-of-range absolute must be refused: %+v", eff)
+	}
+}
+
+// TestPresetListParsesTheTableFormat: Dahua reports presets as indexed
+// key=value lines, and the index in the key is not the preset number.
+func TestPresetListParsesTheTableFormat(t *testing.T) {
+	cam := newFakeDahua(t, withPTZ)
+	cam.mu.Lock()
+	cam.presets = []fakePreset{{3, "loading bay"}, {1, "front door"}}
+	cam.mu.Unlock()
+	a, _ := startAdapter(t, cam)
+
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "dh-1", Capability: profile.CapPTZPresetList})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.Verifiable() || eff.Record.Metrics["preset_count"] != 2 {
+		t.Fatalf("preset list: %+v", eff)
+	}
+	if len(eff.Record.Artifacts) != 1 {
+		t.Fatalf("names must ride as an artifact: %+v", eff.Record)
+	}
+	// The index in the key (0,1) is not the preset number (3,1) — reading
+	// the wrong one would recall the wrong bearing.
+	var got []preset
+	if err := json.Unmarshal(presetBlob(t, a), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Token != "1" || got[0].Name != "front door" {
+		t.Fatalf("presets must carry the vendor Index and Name: %+v", got)
+	}
+}
+
+// presetBlob re-runs the listing and returns the JSON artifact bytes.
+func presetBlob(t *testing.T, a *Adapter) []byte {
+	t.Helper()
+	// The artifact is content-addressed, not carried by value, so the test
+	// reads the store the same way the adapter does.
+	kv, err := func() (map[string]string, error) {
+		d, _ := a.lookup("dh-1")
+		return d.getKV(context.Background(), "/cgi-bin/ptz.cgi?action=getPresets&channel=0")
+	}()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byIndex := map[string]map[string]string{}
+	for k, v := range kv {
+		m := presetLine.FindStringSubmatch(k)
+		if m == nil {
+			continue
+		}
+		if byIndex[m[1]] == nil {
+			byIndex[m[1]] = map[string]string{}
+		}
+		byIndex[m[1]][strings.ToLower(m[2])] = v
+	}
+	list := []preset{}
+	for _, f := range byIndex {
+		if f["index"] != "" {
+			list = append(list, preset{Token: f["index"], Name: strings.TrimSpace(f["name"])})
+		}
+	}
+	sort.Slice(list, func(i, j int) bool {
+		x, _ := strconv.Atoi(list[i].Token)
+		y, _ := strconv.Atoi(list[j].Token)
+		return x < y
+	})
+	b, err := json.Marshal(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// TestPresetOrderIsStable: the parse goes through a map, and an agent
+// comparing two listings must not see them shuffle.
+func TestPresetOrderIsStable(t *testing.T) {
+	cam := newFakeDahua(t, withPTZ)
+	cam.mu.Lock()
+	cam.presets = []fakePreset{{9, "i"}, {2, "ii"}, {5, "iii"}, {1, "iv"}}
+	cam.mu.Unlock()
+	a, _ := startAdapter(t, cam)
+
+	var first string
+	for i := 0; i < 5; i++ {
+		eff, err := a.Invoke(context.Background(), sdk.Call{
+			DeviceID: "dh-1", Capability: profile.CapPTZPresetList})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cid := eff.Record.Artifacts[0].ContentCID
+		if i == 0 {
+			first = cid
+			continue
+		}
+		if cid != first {
+			t.Fatalf("the same preset store must serialise identically every time: %s vs %s", cid, first)
+		}
+	}
+}
+
+func TestPresetSaveThenList(t *testing.T) {
+	cam := newFakeDahua(t, withPTZ)
+	a, _ := startAdapter(t, cam)
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "dh-1", Capability: profile.CapPTZPresetSave,
+		Args: map[string]any{"preset": 7.0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.Verifiable() {
+		t.Fatalf("a saved preset that reads back verifies: %+v", eff)
+	}
+	for _, bad := range []map[string]any{{}, {"preset": 0.0}, {"preset": "x"}} {
+		eff, _ := a.Invoke(context.Background(), sdk.Call{
+			DeviceID: "dh-1", Capability: profile.CapPTZPresetSave, Args: bad})
+		if eff.Status != effect.Failed {
+			t.Fatalf("args %v must be refused: %+v", bad, eff)
+		}
+	}
+}
+
+func TestRebootCannotBeVerified(t *testing.T) {
+	cam := newFakeDahua(t)
+	a, _ := startAdapter(t, cam)
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "dh-1", Capability: profile.CapSystemReboot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eff.Status != effect.Unverified {
+		t.Fatalf("a reboot cannot be verified from here: %+v", eff)
+	}
+	cam.mu.Lock()
+	rebooted := cam.rebooted
+	cam.mu.Unlock()
+	if !rebooted {
+		t.Fatal("the reboot must actually have been sent")
+	}
+}
+
+// TestSystemInfoSurvivesAPartialAnswer: one unsupported magicBox query must
+// not sink the whole report.
+func TestSystemInfoSurvivesAPartialAnswer(t *testing.T) {
+	cam := newFakeDahua(t)
+	a, _ := startAdapter(t, cam)
+	eff, err := a.Invoke(context.Background(), sdk.Call{
+		DeviceID: "dh-1", Capability: profile.CapSystemInfo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.Verifiable() {
+		t.Fatalf("system.info: %+v", eff)
+	}
+	if !strings.Contains(eff.Evidence.ObservedState, "IPC-HFW4431R-Z") {
+		t.Fatalf("evidence should name the model: %q", eff.Evidence.ObservedState)
 	}
 }

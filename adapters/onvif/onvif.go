@@ -90,6 +90,15 @@ func (c *client) skew() time.Duration { return time.Duration(c.skewNS.Load()) }
 
 // device is one live camera: its config, transport, resolved service URLs
 // and the media profile in use.
+// imagingRanges holds the vendor's native spans for the imaging parameters,
+// learned once from GetOptions. ONVIF does not normalise these.
+type imagingRanges struct {
+	brightness vendorRange
+	contrast   vendorRange
+	saturation vendorRange
+	sharpness  vendorRange
+}
+
 type device struct {
 	cfg      DeviceConfig
 	cli      *client
@@ -97,9 +106,13 @@ type device struct {
 	mediaX   string // media service URL
 	ptzX     string // PTZ service URL ("" when the camera has no PTZ)
 	eventsX  string // events service URL ("" when unsupported)
+	imagingX string // imaging service URL ("" when unsupported)
+	videoSrc string // video source token the imaging service addresses
 	profTok  string // media profile token
 	streamU  string // cached RTSP URI
 	snapshot string // cached snapshot URI
+	imgRange imagingRanges
+	imgAvail map[string]bool // which imaging parameters have a usable range
 	caps     map[string]profile.Capability
 }
 
@@ -256,8 +269,9 @@ func (a *Adapter) introspect(ctx context.Context, d *device) error {
 		}
 	}
 
-	// 3. Service endpoints. Cameras place media/PTZ/events on their own URLs.
-	d.mediaX, d.ptzX, d.eventsX = d.deviceX, "", ""
+	// 3. Service endpoints. Cameras place media/PTZ/events/imaging on their
+	// own URLs.
+	d.mediaX, d.ptzX, d.eventsX, d.imagingX = d.deviceX, "", "", ""
 	var caps capabilitiesResponse
 	if err := d.cli.call(ctx, d.deviceX, nsDevice+"/GetCapabilities",
 		`<tds:GetCapabilities><tds:Category>All</tds:Category></tds:GetCapabilities>`, &caps); err == nil {
@@ -266,12 +280,17 @@ func (a *Adapter) introspect(ctx context.Context, d *device) error {
 		}
 		d.ptzX = caps.Body.Capabilities.PTZ.XAddr
 		d.eventsX = caps.Body.Capabilities.Events.XAddr
+		d.imagingX = caps.Body.Capabilities.Imaging.XAddr
 	}
 
 	// 4. Media profile and its URIs.
 	if err := a.resolveMedia(ctx, d); err != nil {
 		return err
 	}
+
+	// 5. Imaging ranges, if the camera offers the service at all. Never
+	// fatal: plenty of cameras stream and pan but expose no imaging control.
+	a.resolveImaging(ctx, d)
 
 	d.buildCaps()
 	return nil
@@ -298,7 +317,13 @@ func (d *device) deviceProfile() *profile.DeviceProfile {
 // capOrder fixes capability ordering in emitted profiles.
 var capOrder = []string{
 	profile.CapStreamRTSP, profile.CapStreamSnapshot,
-	profile.CapPTZMove, profile.CapPTZStop, profile.CapPTZPreset, profile.CapPTZPosition,
+	profile.CapPTZMove, profile.CapPTZStop, profile.CapPTZPosition,
+	profile.CapPTZAbsolute, profile.CapPTZHome,
+	profile.CapPTZPreset, profile.CapPTZPresetList, profile.CapPTZPresetSave, profile.CapPTZTour,
+	profile.CapLensFocus,
+	profile.CapImagingBrightness, profile.CapImagingContrast,
+	profile.CapImagingSaturation, profile.CapImagingSharpness, profile.CapImagingIRCut,
+	profile.CapSystemInfo, profile.CapSystemReboot,
 	profile.CapEventMotion, profile.CapEventTamper, profile.CapEventLineCross,
 }
 
@@ -316,15 +341,37 @@ func (d *device) buildCaps() {
 			ID: profile.CapStreamSnapshot, Access: profile.AccessGet}
 	}
 	if d.ptzX != "" {
-		d.caps[profile.CapPTZMove] = profile.Capability{
-			ID: profile.CapPTZMove, Access: profile.AccessSet}
-		d.caps[profile.CapPTZStop] = profile.Capability{
-			ID: profile.CapPTZStop, Access: profile.AccessSet}
-		d.caps[profile.CapPTZPreset] = profile.Capability{
-			ID: profile.CapPTZPreset, Access: profile.AccessSet}
+		for _, id := range []string{
+			profile.CapPTZMove, profile.CapPTZStop, profile.CapPTZPreset,
+			profile.CapPTZAbsolute, profile.CapPTZHome,
+			profile.CapPTZPresetSave, profile.CapPTZTour,
+		} {
+			d.caps[id] = profile.Capability{ID: id, Access: profile.AccessSet}
+		}
 		d.caps[profile.CapPTZPosition] = profile.Capability{
 			ID: profile.CapPTZPosition, Access: profile.AccessGet | profile.AccessState}
+		d.caps[profile.CapPTZPresetList] = profile.Capability{
+			ID: profile.CapPTZPresetList, Access: profile.AccessGet}
 	}
+	// Imaging parameters are declared one by one, and only the ones whose
+	// range the camera actually reported. A sensor with no contrast control
+	// should not advertise one.
+	if d.imagingX != "" {
+		for id := range d.imgAvail {
+			d.caps[id] = profile.Capability{
+				ID: id, Access: profile.AccessSet | profile.AccessGet}
+		}
+		d.caps[profile.CapImagingIRCut] = profile.Capability{
+			ID: profile.CapImagingIRCut, Access: profile.AccessSet | profile.AccessGet}
+		d.caps[profile.CapLensFocus] = profile.Capability{
+			ID: profile.CapLensFocus, Access: profile.AccessSet}
+	}
+	// Every ONVIF device answers these two.
+	d.caps[profile.CapSystemInfo] = profile.Capability{
+		ID: profile.CapSystemInfo, Access: profile.AccessGet}
+	d.caps[profile.CapSystemReboot] = profile.Capability{
+		ID: profile.CapSystemReboot, Access: profile.AccessSet}
+
 	if d.eventsX != "" && d.cfg.Events {
 		for _, id := range []string{profile.CapEventMotion, profile.CapEventTamper, profile.CapEventLineCross} {
 			d.caps[id] = profile.Capability{ID: id, Access: profile.AccessState}
@@ -373,6 +420,27 @@ func (a *Adapter) Invoke(ctx context.Context, call sdk.Call) (effect.Effect, err
 		return a.invokePTZPreset(ctx, d, call.Args)
 	case profile.CapPTZPosition:
 		return a.invokePTZPosition(ctx, d)
+	case profile.CapPTZAbsolute:
+		return a.invokeAbsolute(ctx, d, call.Args)
+	case profile.CapPTZHome:
+		return a.invokeHome(ctx, d)
+	case profile.CapPTZPresetList:
+		return a.invokePresetList(ctx, d)
+	case profile.CapPTZPresetSave:
+		return a.invokePresetSave(ctx, d, call.Args)
+	case profile.CapPTZTour:
+		return a.invokeTour(ctx, d, call.Args)
+	case profile.CapLensFocus:
+		return a.invokeFocus(ctx, d, call.Args)
+	case profile.CapImagingIRCut:
+		return a.invokeIRCut(ctx, d, call.Args)
+	case profile.CapImagingBrightness, profile.CapImagingContrast,
+		profile.CapImagingSaturation, profile.CapImagingSharpness:
+		return a.invokeImaging(ctx, d, call.Capability, call.Args)
+	case profile.CapSystemInfo:
+		return a.invokeSystemInfo(ctx, d)
+	case profile.CapSystemReboot:
+		return a.invokeReboot(ctx, d)
 	default:
 		// Event capabilities are STATE-only: they arrive on the sink, they
 		// are not something you can pull on demand.

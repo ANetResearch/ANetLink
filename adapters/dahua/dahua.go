@@ -278,7 +278,10 @@ func (a *Adapter) introspect(ctx context.Context, d *device) error {
 
 var capOrder = []string{
 	profile.CapStreamRTSP, profile.CapStreamSnapshot,
-	profile.CapPTZMove, profile.CapPTZStop, profile.CapPTZPreset, profile.CapPTZPosition,
+	profile.CapPTZMove, profile.CapPTZStop, profile.CapPTZPosition,
+	profile.CapPTZAbsolute, profile.CapPTZHome,
+	profile.CapPTZPreset, profile.CapPTZPresetList, profile.CapPTZPresetSave,
+	profile.CapSystemInfo, profile.CapSystemReboot,
 	profile.CapEventMotion, profile.CapEventTamper, profile.CapEventLineCross,
 }
 
@@ -286,12 +289,20 @@ func (d *device) buildCaps() {
 	d.caps[profile.CapStreamRTSP] = profile.Capability{ID: profile.CapStreamRTSP, Access: profile.AccessGet}
 	d.caps[profile.CapStreamSnapshot] = profile.Capability{ID: profile.CapStreamSnapshot, Access: profile.AccessGet}
 	if d.hasPTZ {
-		d.caps[profile.CapPTZMove] = profile.Capability{ID: profile.CapPTZMove, Access: profile.AccessSet}
-		d.caps[profile.CapPTZStop] = profile.Capability{ID: profile.CapPTZStop, Access: profile.AccessSet}
-		d.caps[profile.CapPTZPreset] = profile.Capability{ID: profile.CapPTZPreset, Access: profile.AccessSet}
+		for _, id := range []string{
+			profile.CapPTZMove, profile.CapPTZStop, profile.CapPTZPreset,
+			profile.CapPTZAbsolute, profile.CapPTZHome, profile.CapPTZPresetSave,
+		} {
+			d.caps[id] = profile.Capability{ID: id, Access: profile.AccessSet}
+		}
 		d.caps[profile.CapPTZPosition] = profile.Capability{ID: profile.CapPTZPosition,
 			Access: profile.AccessGet | profile.AccessState}
+		d.caps[profile.CapPTZPresetList] = profile.Capability{ID: profile.CapPTZPresetList,
+			Access: profile.AccessGet}
 	}
+	// Every Dahua unit answers magicBox.
+	d.caps[profile.CapSystemInfo] = profile.Capability{ID: profile.CapSystemInfo, Access: profile.AccessGet}
+	d.caps[profile.CapSystemReboot] = profile.Capability{ID: profile.CapSystemReboot, Access: profile.AccessSet}
 	if d.cfg.Events {
 		for _, id := range []string{profile.CapEventMotion, profile.CapEventTamper, profile.CapEventLineCross} {
 			d.caps[id] = profile.Capability{ID: id, Access: profile.AccessState}
@@ -354,6 +365,18 @@ func (a *Adapter) Invoke(ctx context.Context, call sdk.Call) (effect.Effect, err
 		return a.invokePTZPreset(ctx, d, call.Args)
 	case profile.CapPTZPosition:
 		return a.invokePTZPosition(ctx, d)
+	case profile.CapPTZAbsolute:
+		return a.invokeAbsolute(ctx, d, call.Args)
+	case profile.CapPTZHome:
+		return a.invokeHome(ctx, d)
+	case profile.CapPTZPresetList:
+		return a.invokePresetList(ctx, d)
+	case profile.CapPTZPresetSave:
+		return a.invokePresetSave(ctx, d, call.Args)
+	case profile.CapSystemInfo:
+		return a.invokeSystemInfo(ctx, d)
+	case profile.CapSystemReboot:
+		return a.invokeReboot(ctx, d)
 	default:
 		return sdk.NewEffect().Fail(
 			fmt.Sprintf("%q is a state-only capability; subscribe instead of invoking", call.Capability)).Build(), nil

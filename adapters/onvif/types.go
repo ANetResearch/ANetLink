@@ -58,9 +58,10 @@ type serviceAddr struct {
 type capabilitiesResponse struct {
 	Body struct {
 		Capabilities struct {
-			Media  serviceAddr `xml:"Media"`
-			PTZ    serviceAddr `xml:"PTZ"`
-			Events serviceAddr `xml:"Events"`
+			Media   serviceAddr `xml:"Media"`
+			PTZ     serviceAddr `xml:"PTZ"`
+			Events  serviceAddr `xml:"Events"`
+			Imaging serviceAddr `xml:"Imaging"`
 		} `xml:"Capabilities"`
 	} `xml:"Body>GetCapabilitiesResponse"`
 }
