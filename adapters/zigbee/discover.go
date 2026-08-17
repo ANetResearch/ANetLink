@@ -170,6 +170,10 @@ func ParseSimpleDescResponse(b []byte) ([]uint16, error) {
 func (a *Adapter) zdoRequest(ctx context.Context, reqCmd, rspCmd byte, data []byte) ([]byte, error) {
 	a.mu.Lock()
 	port := a.port
+	if port == nil {
+		a.mu.Unlock()
+		return nil, fmt.Errorf("zigbee: coordinator not started (no serial port)")
+	}
 	if a.zdoWaiters == nil {
 		a.zdoWaiters = map[byte]chan []byte{}
 	}

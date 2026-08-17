@@ -7,6 +7,7 @@ package mcpserv
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -126,7 +127,37 @@ func New(rt *runtime.Runtime, version string) *mcp.Server {
 		return nil, out, nil
 	})
 
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "devices_pair",
+		Description: "Open the networks that support pairing (Zigbee permit-join, ...) for a window of seconds so new devices can join, then report what joined with its capabilities. Use this when the user says they bought or reset a device. Default window 60s, max 254s (a Zigbee limit).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in pairIn) (*mcp.CallToolResult, discoverOut, error) {
+		secs := in.WindowSeconds
+		if secs <= 0 {
+			secs = 60
+		}
+		if secs > 254 {
+			secs = 254
+		}
+		joined, errs := rt.PairAll(ctx, time.Duration(secs)*time.Second)
+		out := discoverOut{}
+		for _, f := range joined {
+			out.Found = append(out.Found, foundView{
+				SuggestedID: f.SuggestedID, Protocol: f.Protocol, Label: f.Label,
+				Address: f.Address, Capabilities: f.Capabilities, ConfigHint: f.ConfigHint,
+			})
+		}
+		for name, err := range errs {
+			out.Problems = append(out.Problems, name+": "+err.Error())
+		}
+		return nil, out, nil
+	})
+
 	return s
+}
+
+// pairIn is the input to devices_pair.
+type pairIn struct {
+	WindowSeconds int `json:"window_seconds,omitempty" jsonschema:"how long to accept new devices, seconds (default 60, max 254)"`
 }
 
 // foundView is the tool-facing projection of a discovered device.

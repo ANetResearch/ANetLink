@@ -63,6 +63,8 @@ type Adapter struct {
 	pending map[uint32]chan []byte
 	// zdoWaiters correlates ZDO responses by command id (discovery).
 	zdoWaiters map[byte]chan []byte
+	// joins fans out device-join events to in-flight Pair calls.
+	joins joinWatchers
 }
 
 func New(cfg Config) *Adapter {
@@ -182,6 +184,12 @@ func (a *Adapter) readLoop(ctx context.Context, r io.Reader) {
 		f, err := ReadFrame(r)
 		if err != nil {
 			return
+		}
+		if f.Subsys == SubsysZDO && (f.Cmd == zdoEndDeviceAnnceInd || f.Cmd == zdoTCDeviceInd) {
+			if e, perr := ParseDeviceAnnounce(f.Data); perr == nil {
+				a.joins.publish(*e)
+			}
+			continue
 		}
 		if f.Subsys == SubsysZDO {
 			a.mu.Lock()

@@ -26,6 +26,7 @@ func main() {
 	serveMCP := flag.Bool("mcp", false, "serve the MCP northbound on stdio (for Claude Code / IDE clients)")
 	configPath := flag.String("config", "", "path to anetlinkd JSON config")
 	scan := flag.Bool("scan", false, "discover devices on the connected networks and print a suggested config")
+	pair := flag.Duration("pair", 0, "open pairing-capable networks for this long (e.g. 60s) and report what joins")
 	scanOut := flag.String("scan-out", "", "with --scan, write the suggested config to this file")
 	c1Socket := flag.String("c1-socket", "", "serve the C1 provider wire on this unix socket (for the ANet daemon shim)")
 	flag.Parse()
@@ -55,6 +56,24 @@ func main() {
 		cid, _ := d.Profile.CID()
 		log.Printf("device %s/%s online=%v trust=T%d profile=%s",
 			d.Profile.Protocol, d.ID, d.Online, d.Profile.MaxTrust, cid)
+	}
+
+	if *pair > 0 {
+		joined, problems := rt.PairAll(ctx, *pair)
+		fmt.Printf("pairing window %s — %d device(s) joined\n", *pair, len(joined))
+		for _, f := range joined {
+			fmt.Printf("  %-24s %-10s %v\n", f.SuggestedID, f.Protocol, f.Capabilities)
+			if f.ConfigHint != "" {
+				fmt.Printf("    config: %s\n", f.ConfigHint)
+			}
+		}
+		for name, err := range problems {
+			fmt.Printf("! %s: %v\n", name, err)
+		}
+		if len(joined) == 0 && len(problems) == 0 {
+			fmt.Println("  (no adapter supports pairing, or nothing joined in the window)")
+		}
+		return
 	}
 
 	if *scan {

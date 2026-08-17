@@ -283,3 +283,64 @@ func TestAsDeviceConfigsFiltersUnmappable(t *testing.T) {
 		t.Fatalf("unmappable clusters must be dropped: %+v", c.Endpoints)
 	}
 }
+
+// --- pairing (the "I bought a lamp" path) ---
+
+func TestParseDeviceAnnounce(t *testing.T) {
+	b := make([]byte, 13)
+	binary.LittleEndian.PutUint16(b[0:], 0x0000)             // srcAddr
+	binary.LittleEndian.PutUint16(b[2:], 0xC3D4)             // new short addr
+	binary.LittleEndian.PutUint64(b[4:], 0x00158D0002ABCDEF) // IEEE
+	e, err := ParseDeviceAnnounce(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.ShortAddr != 0xC3D4 || e.IEEE != 0x00158D0002ABCDEF {
+		t.Fatalf("announce decode: %+v", e)
+	}
+	if _, err := ParseDeviceAnnounce([]byte{1, 2, 3}); err == nil {
+		t.Fatal("short announce must be rejected")
+	}
+}
+
+// TestJoinWatchersFanOut proves a pairing call actually receives the joins
+// the read loop publishes.
+func TestJoinWatchersFanOut(t *testing.T) {
+	var w joinWatchers
+	c1 := w.add()
+	c2 := w.add()
+	w.publish(JoinEvent{ShortAddr: 0x1111, IEEE: 0xAA})
+	for i, c := range []chan JoinEvent{c1, c2} {
+		select {
+		case e := <-c:
+			if e.ShortAddr != 0x1111 {
+				t.Fatalf("watcher %d got %+v", i, e)
+			}
+		default:
+			t.Fatalf("watcher %d received nothing", i)
+		}
+	}
+	w.remove(c1)
+	w.publish(JoinEvent{ShortAddr: 0x2222})
+	select {
+	case <-c1:
+		t.Fatal("removed watcher must not receive further events")
+	default:
+	}
+	select {
+	case e := <-c2:
+		if e.ShortAddr != 0x2222 {
+			t.Fatalf("remaining watcher got %+v", e)
+		}
+	default:
+		t.Fatal("remaining watcher missed the event")
+	}
+}
+
+// TestPermitJoinWithoutCoordinator: honest failure, no silent success.
+func TestPermitJoinWithoutCoordinator(t *testing.T) {
+	a, _ := testAdapter()
+	if err := a.PermitJoin(context.Background(), 60*time.Second); err == nil {
+		t.Fatal("permit-join without a coordinator must fail loudly")
+	}
+}

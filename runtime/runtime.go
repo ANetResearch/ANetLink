@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/ANetResearch/ANetCore/effect"
 	"github.com/ANetResearch/ANetLink/profile"
@@ -234,4 +235,46 @@ func (r *Runtime) DiscoverAll(ctx context.Context) ([]sdk.Found, map[string]erro
 		return found[i].SuggestedID < found[j].SuggestedID
 	})
 	return found, errs
+}
+
+// PairAll opens every pairing-capable adapter for the given window and
+// returns everything that joined. Adapters that cannot pair are skipped.
+func (r *Runtime) PairAll(ctx context.Context, window time.Duration) ([]sdk.Found, map[string]error) {
+	r.mu.RLock()
+	adapters := make(map[string]sdk.Adapter, len(r.adapters))
+	for name, a := range r.adapters {
+		adapters[name] = a
+	}
+	r.mu.RUnlock()
+
+	var (
+		mu     sync.Mutex
+		joined []sdk.Found
+		errs   = map[string]error{}
+		wg     sync.WaitGroup
+	)
+	for name, a := range adapters {
+		p, ok := a.(interface {
+			PairDevices(context.Context, time.Duration) ([]sdk.Found, error)
+		})
+		if !ok {
+			continue
+		}
+		wg.Add(1)
+		go func(name string, p interface {
+			PairDevices(context.Context, time.Duration) ([]sdk.Found, error)
+		}) {
+			defer wg.Done()
+			got, err := p.PairDevices(ctx, window)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil && len(got) == 0 {
+				errs[name] = err
+				return
+			}
+			joined = append(joined, got...)
+		}(name, p)
+	}
+	wg.Wait()
+	return joined, errs
 }
