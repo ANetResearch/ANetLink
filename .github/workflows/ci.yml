@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        tags: ["no_modbus", "no_mqtt", "no_ha", "no_sim", "no_opcua", "no_modbus,no_mqtt,no_ha,no_sim,no_opcua"]
+        tags: ["no_modbus", "no_mqtt", "no_ha", "no_sim", "no_opcua", "no_bacnet", "no_modbus,no_mqtt,no_ha,no_sim,no_opcua,no_bacnet"]
     env:
       CGO_ENABLED: "0"
     steps:
