@@ -13,15 +13,13 @@ import (
 // Matter device (the testbed matter.js light). Cross-implementation at the
 // hardest layer.
 //
-// STATUS (D54): the exchange reaches Pake2 — framing, TLV, MRP, PBKDF
-// parameter negotiation and share exchange all interoperate with a real
-// device. The device's confirmation MAC does not yet verify. The SPAKE2+
-// primitive itself is proven correct against the RFC 9383 P-256 vector
-// (see matter/spake2p/vectors_test.go), and the PASE context construction
-// matches connectedhomeip's PASESession.cpp (SHA-256 over prefix ‖ request
-// ‖ response). The remaining delta is a Matter-specific detail that needs a
-// connectedhomeip-derived PASE vector (w0/w1 or Z/V convention) to pin —
-// deliberately NOT chased by further live trial-and-error.
+// STATUS: PASSING (D54 closed). A pure-Go commissioner completes the full
+// PASE handshake against a real Matter device and both sides derive the same
+// session key. Getting here required pinning the primitive against
+// connectedhomeip's own SPAKE2+ vectors, which exposed three deviations from
+// the RFC-literal reading: K_main splits Ka‖Ke (Matter) rather than Ke‖Ka,
+// the confirmation KDF takes Ka (not K_main) and yields 16-byte keys, and
+// cA = MAC(KcA, shareV) with cB = MAC(KcB, shareP).
 //
 // Set ANETLINK_MATTER_ADDR=<ip:5540>; the testbed passcode is 20202021.
 func TestRealPASEHandshake(t *testing.T) {
