@@ -44,9 +44,9 @@ stacks land per the coverage matrix below.
 | **BACnet/IP (building)** ✅ | — (direct) | pure-Go ASHRAE 135 codec |
 | **CAN (vehicle/industrial)** ✅ | SocketCAN probe | pure-Go signal codec |
 | Zigbee | running zigbee2mqtt | pure-Go serial coordinator stack |
-| BLE | BlueZ via D-Bus | pure-Go kernel HCI |
+| BLE ✅ | — | pure-Go kernel HCI socket (no BlueZ, no cgo) |
 | BT Mesh | bluetooth-meshd | pure-Go provisioning + models |
-| Matter (IP) | existing controller/HA | pure-Go stack (SPAKE2+/CASE + codegen clusters) |
+| Matter (IP) 🔶 | existing controller/HA | pure-Go stack — **PASE verified against a real device**; commissioning flow next |
 | Thread | host OTBR | bundled OTBR (managed subprocess) |
 
 ## 使用手册
