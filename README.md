@@ -45,7 +45,7 @@ stacks land per the coverage matrix below.
 | **CAN (vehicle/industrial)** ✅ | SocketCAN probe | pure-Go signal codec |
 | Zigbee ✅ | running zigbee2mqtt (MQTT bridge) | pure-Go Z-Stack serial coordinator |
 | BLE ✅ | — | pure-Go kernel HCI socket (no BlueZ, no cgo) |
-| BT Mesh | bluetooth-meshd | pure-Go provisioning + models |
+| BT Mesh ✅ | — | pure-Go CMAC/CCM crypto + models |
 | Matter (IP) 🔶 | existing controller/HA | pure-Go stack — **PASE verified against a real device**; commissioning flow next |
 | Thread | host OTBR | bundled OTBR (managed subprocess) |
 
