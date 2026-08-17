@@ -46,8 +46,8 @@ stacks land per the coverage matrix below.
 | Zigbee ✅ | running zigbee2mqtt (MQTT bridge) | pure-Go Z-Stack serial coordinator |
 | BLE ✅ | — | pure-Go kernel HCI socket (no BlueZ, no cgo) |
 | BT Mesh ✅ | — | pure-Go CMAC/CCM crypto + models |
-| Matter (IP) 🔶 | existing controller/HA | pure-Go stack — **PASE verified against a real device**; commissioning flow next |
-| Thread ✅ | host OTBR (REST) | bundled OTBR as managed subprocess (the one exemption) |
+| Matter (IP) ✅ | existing controller/HA | pure-Go stack — **PASE verified against a real device**, secured session, interaction model, commissioning sequence |
+| Thread ✅ | host OTBR (REST) + CoAP devices | bundled OTBR as managed subprocess (the one exemption) |
 
 ## 使用手册
 

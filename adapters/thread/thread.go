@@ -270,10 +270,42 @@ func (a *Adapter) Invoke(ctx context.Context, call sdk.Call) (effect.Effect, err
 	if base == "" {
 		return sdk.NewEffect().Unavailable("no border router available").Build(), nil
 	}
-	// CoAP over the Thread mesh is the next increment; until then the honest
-	// answer is that the command path is not yet wired.
-	return sdk.NewEffect().
-		Protocol("thread").
+	metric := strings.ReplaceAll(rm.ID, ".", "_")
+	scale := rm.Scale
+	if scale == 0 {
+		scale = 1
+	}
+
+	// SET: PUT the value, then GET it back — readback is the metric.
+	if raw, isSet := call.Args["value"]; isSet {
+		body := fmt.Sprintf("%v", raw)
+		resp, err := a.coapRequest(ctx, dev.Address, rm.Path, codePUT, []byte(body))
+		if err != nil {
+			return sdk.NewEffect().Unavailable("CoAP PUT: " + err.Error()).Build(), nil
+		}
+		if !coapClassOK(resp.Code) {
+			return sdk.NewEffect().Fail(fmt.Sprintf("device rejected the write (CoAP %d.%02d)",
+				resp.Code>>5, resp.Code&0x1F)).Build(), nil
+		}
+	}
+
+	resp, err := a.coapRequest(ctx, dev.Address, rm.Path, codeGET, nil)
+	if err != nil {
+		return sdk.NewEffect().Unavailable("CoAP GET: " + err.Error()).Build(), nil
+	}
+	if !coapClassOK(resp.Code) {
+		return sdk.NewEffect().Fail(fmt.Sprintf("CoAP %d.%02d from device",
+			resp.Code>>5, resp.Code&0x1F)).Build(), nil
+	}
+	v, perr := strconv.ParseFloat(strings.TrimSpace(string(resp.Payload)), 64)
+	if perr != nil {
+		return sdk.NewEffect().Unavailable(fmt.Sprintf("non-numeric CoAP payload %q", resp.Payload)).Build(), nil
+	}
+	v *= scale
+	return sdk.NewEffect().Metric(metric, v).
+		Requested(fmt.Sprintf("%s=%v", rm.ID, call.Args["value"])).
+		Protocol("thread").NativeAck(true).
+		Observed(strconv.FormatFloat(v, 'f', -1, 64)).
 		Trust(uint8(profile.V2), uint8(profile.A2)).
-		Unavailable("CoAP device path not implemented yet (border router reachable)").Build(), nil
+		Verified().Build(), nil
 }

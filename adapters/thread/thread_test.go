@@ -3,6 +3,8 @@ package thread
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -127,7 +129,9 @@ func TestStartExposesDevicesAndState(t *testing.T) {
 	}
 }
 
-func TestInvokeIsHonestAboutMissingCoAP(t *testing.T) {
+// TestInvokeUnreachableDeviceIsHonest: the CoAP path exists now, so an
+// unreachable device must time out honestly rather than invent a reading.
+func TestInvokeUnreachableDeviceIsHonest(t *testing.T) {
 	srv := fakeOTBR(t, "leader")
 	a := New(testConfig(srv.URL))
 	sink := &memSink{devices: map[string]sdk.Device{}}
@@ -139,13 +143,12 @@ func TestInvokeIsHonestAboutMissingCoAP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The device path is not implemented yet — it must say so rather than
-	// fabricate a reading.
+	// fd00::1 is not on this host: the request must fail, not fabricate.
 	if eff.Status != effect.Unavailable {
-		t.Fatalf("unimplemented device path must be UNAVAILABLE, never a fake value: %+v", eff)
+		t.Fatalf("unreachable device must be UNAVAILABLE, never a fake value: %+v", eff)
 	}
 	if eff.Record != nil {
-		t.Fatal("no metrics may be reported for an unimplemented path")
+		t.Fatal("no metrics may be reported when the device never answered")
 	}
 
 	eff, _ = a.Invoke(context.Background(), sdk.Call{DeviceID: "ghost", Capability: "x"})
@@ -155,5 +158,134 @@ func TestInvokeIsHonestAboutMissingCoAP(t *testing.T) {
 	eff, _ = a.Invoke(context.Background(), sdk.Call{DeviceID: "sensor-1", Capability: "ghost"})
 	if eff.Status != effect.Failed {
 		t.Fatalf("unknown capability must FAIL: %+v", eff)
+	}
+}
+
+// --- CoAP device path ---
+
+// fakeCoAPDevice answers CoAP GET/PUT on a real UDP socket, so both
+// directions of our codec meet a real wire.
+type fakeCoAPDevice struct {
+	conn  *net.UDPConn
+	mu    sync.Mutex
+	value string
+}
+
+func newCoAPDevice(t *testing.T, initial string) *fakeCoAPDevice {
+	t.Helper()
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
+	if err != nil {
+		t.Skipf("no IPv6 loopback available: %v", err)
+	}
+	d := &fakeCoAPDevice{conn: conn, value: initial}
+	go d.serve()
+	t.Cleanup(func() { conn.Close() })
+	return d
+}
+
+func (d *fakeCoAPDevice) port() int { return d.conn.LocalAddr().(*net.UDPAddr).Port }
+
+func (d *fakeCoAPDevice) serve() {
+	buf := make([]byte, 1500)
+	for {
+		n, peer, err := d.conn.ReadFromUDP(buf)
+		if err != nil {
+			return
+		}
+		m, derr := decodeCoAP(buf[:n])
+		if derr != nil {
+			continue
+		}
+		d.mu.Lock()
+		if m.Code == codePUT && len(m.Payload) > 0 {
+			d.value = string(m.Payload)
+		}
+		val := d.value
+		d.mu.Unlock()
+
+		code := codeContent
+		payload := []byte(val)
+		if m.Code == codePUT {
+			code = codeChanged
+			payload = nil
+		}
+		resp := encodeCoAP(typeACK, code, m.MessageID, m.Token, "", payload)
+		_, _ = d.conn.WriteToUDP(resp, peer)
+	}
+}
+
+func TestCoAPCodec(t *testing.T) {
+	req := encodeCoAP(typeCON, codeGET, 0x1234, []byte{1, 2, 3, 4}, "/sensors/temp", nil)
+	m, err := decodeCoAP(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Type != typeCON || m.Code != codeGET || m.MessageID != 0x1234 {
+		t.Fatalf("header round-trip: %+v", m)
+	}
+	if len(m.Token) != 4 || m.Token[0] != 1 {
+		t.Fatalf("token round-trip: %x", m.Token)
+	}
+
+	withPayload := encodeCoAP(typeACK, codeContent, 0x0001, nil, "", []byte("21.5"))
+	m, err = decodeCoAP(withPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(m.Payload) != "21.5" {
+		t.Fatalf("payload round-trip: %q", m.Payload)
+	}
+	for _, bad := range [][]byte{nil, {0x40}, {0xC0, 0x01, 0x00, 0x00}} {
+		if _, err := decodeCoAP(bad); err == nil {
+			t.Fatalf("malformed CoAP %x must be rejected", bad)
+		}
+	}
+}
+
+func TestCoAPReadAgainstRealSocket(t *testing.T) {
+	dev := newCoAPDevice(t, "2150")
+	srv := fakeOTBR(t, "leader")
+	cfg := testConfig(srv.URL)
+	cfg.Devices[0].Address = "::1"
+	a := New(cfg)
+	sink := &memSink{devices: map[string]sdk.Device{}}
+	b, _ := sdk.Select(context.Background(), "", a.Backends()...)
+	_ = a.Start(context.Background(), b, sink)
+	defer a.Stop(context.Background())
+
+	// Reaching the device requires the well-known CoAP port; on a test host we
+	// cannot bind 5683, so exercise the request path directly against the
+	// device's ephemeral port instead.
+	m, err := a.coapRequestAt(context.Background(), fmt.Sprintf("[::1]:%d", dev.port()), "/temp", codeGET, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !coapClassOK(m.Code) || string(m.Payload) != "2150" {
+		t.Fatalf("CoAP read: code=%02x payload=%q", m.Code, m.Payload)
+	}
+}
+
+func TestCoAPWriteThenReadBack(t *testing.T) {
+	dev := newCoAPDevice(t, "0")
+	a := New(testConfig("http://127.0.0.1:1"))
+	addr := fmt.Sprintf("[::1]:%d", dev.port())
+
+	if _, err := a.coapRequestAt(context.Background(), addr, "/light", codePUT, []byte("1")); err != nil {
+		t.Fatal(err)
+	}
+	m, err := a.coapRequestAt(context.Background(), addr, "/light", codeGET, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(m.Payload) != "1" {
+		t.Fatalf("write did not take: %q", m.Payload)
+	}
+}
+
+func TestCoAPTimeoutIsHonest(t *testing.T) {
+	a := New(Config{Timeout: 300 * time.Millisecond})
+	_, err := a.coapRequestAt(context.Background(), "[::1]:1", "/x", codeGET, nil)
+	if err == nil {
+		t.Fatal("an unreachable device must not appear to succeed")
 	}
 }
