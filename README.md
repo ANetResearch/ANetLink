@@ -47,7 +47,7 @@ stacks land per the coverage matrix below.
 | BLE ✅ | — | pure-Go kernel HCI socket (no BlueZ, no cgo) |
 | BT Mesh ✅ | — | pure-Go CMAC/CCM crypto + models |
 | Matter (IP) 🔶 | existing controller/HA | pure-Go stack — **PASE verified against a real device**; commissioning flow next |
-| Thread | host OTBR | bundled OTBR (managed subprocess) |
+| Thread ✅ | host OTBR (REST) | bundled OTBR as managed subprocess (the one exemption) |
 
 ## 使用手册
 

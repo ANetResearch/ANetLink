@@ -11,6 +11,8 @@ require (
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/tbrandon/mbserver v0.0.0-20231208015628-36eb59221ac2
+	go.bug.st/serial v1.8.0
+	go.einride.tech/can v0.17.0
 	golang.org/x/crypto v0.55.0
 	golang.org/x/net v0.58.0
 )
@@ -38,8 +40,6 @@ require (
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	go.bug.st/serial v1.8.0 // indirect
-	go.einride.tech/can v0.17.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
