@@ -301,9 +301,21 @@ config 里 `"sim": {"enabled": false}` 显式关闭。信任 T4（进程内闭�
 - 需要 `CAP_NET_RAW` 与蓝牙控制器；没有时探测如实报告不可用。
 
 ### 6.9 matter（Matter over IP，纯 Go）
-七砖已就位：TLV 编解码 · mDNS 可配对发现 · SPAKE2+ · PASE 握手 · 消息帧 · UDP exchange ·
-**加密会话**（HKDF 派生双向密钥 + 证明质询；AES-CCM 加密,消息头作为 AAD 认证;
-CCM 对 NIST SP 800-38C 两组官方向量钉死）。
+**九砖齐备,从发现到入网的完整链路**：
+
+| 砖 | 内容 | 验证方式 |
+|---|---|---|
+| tlv | Matter TLV 编解码 | 12 条规范向量 + 38 万次 fuzz |
+| disc | mDNS `_matterc._udp` 发现 | **真机**（找到 matter.js 灯） |
+| spake2p | SPAKE2+ over P-256 | **RFC 9383 + connectedhomeip 官方向量双钉** |
+| pase | PASE 五消息握手 | **真机握手成功,双方导出同一会话密钥** |
+| frame | 消息帧（§4.4/§4.8） | 字节级黄金布局 + fuzz |
+| exchange | UDP + MRP 重传 | 真机 |
+| session | 加密会话（AES-CCM,头作 AAD） | **NIST SP 800-38C 两组官方向量** |
+| im | 交互模型（读/写/调用） | 编解码往返 |
+| commission | 入网序列（失效保护→CSR→AddNOC→完成） | 顺序/中止/凭据/CSR 流向全测 |
+
+Thread 的 CoAP 设备路径同样就位（手写 RFC 7252,CON 重传,写后读回验证）。
 **PASE 已对真实 Matter 设备验证通过**（与 matter.js 虚拟灯完成完整握手、双方导出同一
 会话密钥）；SPAKE2+ 同时对 RFC 9383 与 connectedhomeip 官方向量钉死。
 后续：加密会话 + commissioning 全流程（arm-failsafe/CSR/AddNOC）→ 集群交互。
