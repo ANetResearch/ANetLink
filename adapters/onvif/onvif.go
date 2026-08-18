@@ -147,34 +147,57 @@ func (b nativeBackend) Probe(ctx context.Context) sdk.Availability {
 			Detail:    "pure-Go ONVIF; no cameras configured — use --scan to find them",
 		}
 	}
-	// Reachability of the first camera's device service. GetSystemDateAndTime
-	// is the one ONVIF call defined to work unauthenticated, so it probes the
-	// transport without depending on credentials being right yet — but
-	// firmware in the field does not always honour that, so a refusal falls
-	// back to an authenticated call rather than condemning the camera.
-	d := b.cfg.Devices[0]
 	timeout := b.cfg.Timeout
 	if timeout == 0 {
 		timeout = 5 * time.Second
 	}
-	url := deviceServiceURL(d)
-	anon := &client{http: &http.Client{Timeout: timeout}}
-	var sdt systemDateAndTime
-	err := anon.call(ctx, url, nsDevice+"/GetSystemDateAndTime", `<tds:GetSystemDateAndTime/>`, &sdt)
-	if err != nil {
-		authed := &client{http: &http.Client{Timeout: timeout}, user: d.User, pass: d.Pass}
-		var caps capabilitiesResponse
-		if err2 := authed.call(ctx, url, nsDevice+"/GetCapabilities",
-			`<tds:GetCapabilities><tds:Category>All</tds:Category></tds:GetCapabilities>`, &caps); err2 != nil {
-			return sdk.Availability{
-				Available: false,
-				Detail:    fmt.Sprintf("camera %s unreachable: %v", d.ID, err2),
+
+	// Ask each camera in turn, and stop at the first that answers.
+	//
+	// This used to probe only Devices[0], which made the whole adapter —
+	// and therefore the daemon — unavailable whenever that one camera was
+	// down, however many others were answering. A camera going offline is
+	// the most ordinary event in a camera deployment, and it is a device
+	// state, not a startup failure: the unreachable ones surface as
+	// offline devices, which is what the effect model is for.
+	//
+	// The backend is unavailable only when nothing answers at all, which is
+	// the case that really does mean "this adapter cannot do anything".
+	var lastErr string
+	for i, d := range b.cfg.Devices {
+		url := deviceServiceURL(d)
+		if url == "" {
+			lastErr = fmt.Sprintf("camera %s has no address", d.ID)
+			continue
+		}
+		// GetSystemDateAndTime is the one ONVIF call defined to work
+		// unauthenticated, so it probes the transport without depending on
+		// credentials being right yet — but firmware in the field does not
+		// always honour that, so a refusal falls back to an authenticated
+		// call rather than condemning the camera.
+		anon := &client{http: &http.Client{Timeout: timeout}}
+		var sdt systemDateAndTime
+		if err := anon.call(ctx, url, nsDevice+"/GetSystemDateAndTime",
+			`<tds:GetSystemDateAndTime/>`, &sdt); err != nil {
+			authed := &client{http: &http.Client{Timeout: timeout}, user: d.User, pass: d.Pass}
+			var caps capabilitiesResponse
+			if err2 := authed.call(ctx, url, nsDevice+"/GetCapabilities",
+				`<tds:GetCapabilities><tds:Category>All</tds:Category></tds:GetCapabilities>`, &caps); err2 != nil {
+				lastErr = fmt.Sprintf("camera %s unreachable: %v", d.ID, err2)
+				continue
 			}
 		}
+		detail := fmt.Sprintf("pure-Go ONVIF; %d camera(s), %s answered", len(b.cfg.Devices), d.ID)
+		if i > 0 {
+			// Say so: starting with some cameras down is a fact an operator
+			// wants in the log, not something to discover later.
+			detail += fmt.Sprintf(" (%d ahead of it did not; last: %s)", i, lastErr)
+		}
+		return sdk.Availability{Available: true, Detail: detail}
 	}
 	return sdk.Availability{
-		Available: true,
-		Detail:    fmt.Sprintf("pure-Go ONVIF; %d camera(s), %s answered", len(b.cfg.Devices), d.ID),
+		Available: false,
+		Detail:    fmt.Sprintf("no configured camera answered (%d tried; last: %s)", len(b.cfg.Devices), lastErr),
 	}
 }
 

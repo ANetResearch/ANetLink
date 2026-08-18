@@ -1334,3 +1334,56 @@ func TestFixedCameraDeclaresNoImagingOrPTZ(t *testing.T) {
 		}
 	}
 }
+
+// A camera being down must not take the adapter — and with it the daemon —
+// out of service while other cameras are answering.
+//
+// This is not hypothetical. The deployed testbed daemon sat in a restart
+// loop 4,225 restarts deep because the first camera in its config had moved
+// to a different port: nine reachable cameras, and the probe only ever
+// asked the one that was gone.
+func TestProbeSurvivesADeadCameraAheadOfALiveOne(t *testing.T) {
+	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/soap+xml")
+		fmt.Fprint(w, soapOK(`<tds:GetSystemDateAndTimeResponse `+
+			`xmlns:tds="http://www.onvif.org/ver10/device/wsdl"/>`))
+	}))
+	defer live.Close()
+
+	av := nativeBackend{Config{
+		Timeout: time.Second,
+		Devices: []DeviceConfig{
+			// Port 1 is reserved and refuses immediately.
+			{ID: "dead", XAddr: "http://127.0.0.1:1/onvif/device_service"},
+			{ID: "live", XAddr: live.URL + "/onvif/device_service"},
+		},
+	}}.Probe(context.Background())
+
+	if !av.Available {
+		t.Fatalf("a live camera behind a dead one must keep the adapter available: %s", av.Detail)
+	}
+	if !strings.Contains(av.Detail, "live answered") {
+		t.Errorf("the detail should name the camera that answered: %q", av.Detail)
+	}
+	if !strings.Contains(av.Detail, "did not") {
+		t.Errorf("the detail should say some cameras were unreachable: %q", av.Detail)
+	}
+}
+
+// With nothing answering, the backend really is unusable and must say so —
+// that is the case the loud failure was written for.
+func TestProbeFailsWhenNoCameraAnswers(t *testing.T) {
+	av := nativeBackend{Config{
+		Timeout: time.Second,
+		Devices: []DeviceConfig{
+			{ID: "a", XAddr: "http://127.0.0.1:1/onvif/device_service"},
+			{ID: "b", XAddr: "http://127.0.0.1:1/onvif/device_service"},
+		},
+	}}.Probe(context.Background())
+	if av.Available {
+		t.Fatal("no camera answered, so the backend is not available")
+	}
+	if !strings.Contains(av.Detail, "2 tried") {
+		t.Errorf("the detail should say how many were tried: %q", av.Detail)
+	}
+}
