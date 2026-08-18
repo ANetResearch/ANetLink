@@ -40,3 +40,18 @@ quirks:
     fixes:
       - {type: scale, capability: climate.temperature, factor: 0.1}
       - {type: scale, capability: climate.setpoint, factor: 0.1}
+
+  - id: quirk.tuya.ts0601.thermostat.zigbee2mqtt
+    note: >
+      The same TS0601 deviation, keyed on the capability names the MQTT
+      bridge produces. A quirk is keyed on a capability, and the same
+      physical device arrives with different capability names depending on
+      which adapter reached it: zigbee2mqtt maps every numeric expose to
+      sensor.<property>, so the thermostat's temperature is
+      sensor.local_temperature there and climate.temperature over a native
+      Zigbee stack. Both spellings need the correction, or the value is
+      right on one path and ten times too large on the other.
+    match: {vendor: Tuya, model: "TS0601*"}
+    fixes:
+      - {type: scale, capability: sensor.local_temperature, factor: 0.1}
+      - {type: scale, capability: sensor.occupied_heating_setpoint, factor: 0.1}

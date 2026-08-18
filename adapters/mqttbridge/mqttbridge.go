@@ -221,11 +221,34 @@ func (a *Adapter) onState(_ paho.Client, m paho.Message) {
 		}
 	}
 	if sink != nil {
+		// Metric names follow the capability, not the vendor's property.
+		// The capability for this quantity is sensor.temperature, so the
+		// metric is sensor_temperature — the same name the invoke path
+		// uses and every other adapter emits. Publishing the raw property
+		// name here made the same quantity answer to two different names
+		// depending on which surface you read, which also put it out of
+		// reach of anything keyed on the capability.
+		a.mu.Lock()
+		binds := a.binds[name]
+		a.mu.Unlock()
+		byProperty := make(map[string]string, len(binds))
+		for capID, b := range binds {
+			byProperty[b.property] = strings.ReplaceAll(capID, ".", "_")
+		}
 		metrics := map[string]float64{}
 		for k, v := range payload {
-			if f, ok := v.(float64); ok {
-				metrics[k] = f
+			f, ok := v.(float64)
+			if !ok {
+				continue
 			}
+			if metric, known := byProperty[k]; known {
+				metrics[metric] = f
+				continue
+			}
+			// Properties with no capability (linkquality, battery) still
+			// carry information an operator wants; they keep their own name
+			// because there is no capability to derive one from.
+			metrics[k] = f
 		}
 		if len(metrics) > 0 {
 			sink.State(name, metrics)
