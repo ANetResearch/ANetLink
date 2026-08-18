@@ -35,7 +35,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("anetlinkd: %v", err)
 	}
-	rt := runtime.New(cfg.runtimeConfig())
+	rtCfg, err := cfg.runtimeConfig()
+	if err != nil {
+		log.Fatalf("anetlinkd: %v", err)
+	}
+	rt := runtime.New(rtCfg)
+	if rtCfg.Quirks != nil {
+		log.Printf("vendor corrections loaded: %d quirk(s)", rtCfg.Quirks.Len())
+	}
 	adapters, err := cfg.buildAdapters()
 	if err != nil {
 		log.Fatalf("anetlinkd: %v", err)

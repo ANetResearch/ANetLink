@@ -13,6 +13,7 @@ import (
 
 	"github.com/ANetResearch/ANetCore/effect"
 	"github.com/ANetResearch/ANetLink/profile"
+	"github.com/ANetResearch/ANetLink/quirk"
 	"github.com/ANetResearch/ANetLink/sdk"
 )
 
@@ -21,6 +22,11 @@ type Config struct {
 	// BackendOverride forces a named backend per adapter name (operator
 	// escape hatch over A5 probing).
 	BackendOverride map[string]string
+	// Quirks corrects vendor deviations between an adapter's raw reading
+	// and the model published north of here (D03 §7). Nil means no
+	// corrections, which is the right default: a quirk that nobody loaded
+	// must never be assumed.
+	Quirks *quirk.Registry
 }
 
 // DeviceKey is the runtime-global device address: adapter name + device id.
@@ -31,16 +37,25 @@ func (k DeviceKey) String() string { return k.Adapter + "/" + k.Device }
 type deviceEntry struct {
 	dev     sdk.Device
 	adapter sdk.Adapter
+	// raw is the profile the adapter reported, before correction. Kept so
+	// an operator can see what the device actually claimed as against what
+	// the runtime publishes — a correction you cannot compare against the
+	// original is a correction you cannot review.
+	raw *profile.DeviceProfile
+	// quirks are the corrections matching this device, resolved once at
+	// registration rather than per invocation.
+	quirks quirk.Applied
 }
 
 // Runtime hosts adapters and exposes their devices as capabilities.
 type Runtime struct {
-	cfg      Config
-	mu       sync.RWMutex
-	adapters map[string]sdk.Adapter
-	backends map[string]string // adapter name → selected backend name
-	devices  map[DeviceKey]*deviceEntry
-	started  bool
+	cfg       Config
+	mu        sync.RWMutex
+	adapters  map[string]sdk.Adapter
+	backends  map[string]string // adapter name → selected backend name
+	devices   map[DeviceKey]*deviceEntry
+	lastState map[DeviceKey]map[string]float64
+	started   bool
 }
 
 func New(cfg Config) *Runtime {
@@ -155,6 +170,9 @@ func (r *Runtime) Invoke(ctx context.Context, key DeviceKey, capability string, 
 	if err != nil {
 		return effect.Effect{}, err
 	}
+	// Corrections apply to the reading, never to the trust: a device that
+	// lies about its units is not thereby more trustworthy.
+	eff = e.quirks.ApplyEffect(eff)
 	if eff.Status == effect.OK && e.dev.Profile.MaxTrust < profile.VerifiableFrom {
 		eff.Status = effect.Unverified
 		if eff.Message == "" {
@@ -171,9 +189,30 @@ type sink struct {
 }
 
 func (s *sink) UpsertDevice(d sdk.Device) {
+	raw := d.Profile
+	applied := quirk.Applied{}
+	if s.rt.cfg.Quirks != nil {
+		// Firmware is device metadata, not a capability, so TSIR-D has no
+		// field for it; adapters that know it put it in the model string.
+		applied = s.rt.cfg.Quirks.For(d.Profile, firmwareOf(d.Profile))
+		d.Profile = applied.ApplyProfile(d.Profile)
+	}
 	s.rt.mu.Lock()
 	defer s.rt.mu.Unlock()
-	s.rt.devices[DeviceKey{s.adapter.Info().Name, d.ID}] = &deviceEntry{dev: d, adapter: s.adapter}
+	s.rt.devices[DeviceKey{s.adapter.Info().Name, d.ID}] = &deviceEntry{
+		dev: d, adapter: s.adapter, raw: raw, quirks: applied,
+	}
+}
+
+// firmwareOf extracts a firmware string when the adapter supplied one.
+// Cameras report "V5.6.5 build 200316" in their model line; Zigbee devices
+// carry it separately. Absent is absent — a quirk keyed on firmware must
+// not match a device whose firmware nobody knows.
+func firmwareOf(p *profile.DeviceProfile) string {
+	if p == nil {
+		return ""
+	}
+	return p.Firmware
 }
 
 func (s *sink) RemoveDevice(id string) {
@@ -182,8 +221,66 @@ func (s *sink) RemoveDevice(id string) {
 	delete(s.rt.devices, DeviceKey{s.adapter.Info().Name, id})
 }
 
-func (s *sink) State(string, map[string]float64) {
-	// v0: state stream not yet persisted; will feed the STATE surface + AEL.
+// State corrects an unsolicited report before it reaches anything north of
+// the runtime. A state stream that carries raw vendor units while an invoke
+// on the same capability carries corrected ones would be worse than no
+// correction at all.
+func (s *sink) State(deviceID string, metrics map[string]float64) {
+	key := DeviceKey{s.adapter.Info().Name, deviceID}
+	s.rt.mu.RLock()
+	e, ok := s.rt.devices[key]
+	s.rt.mu.RUnlock()
+	if ok && !e.quirks.Empty() {
+		metrics, _ = e.quirks.ApplyMetrics(metrics)
+	}
+	s.rt.observe(key, metrics)
+}
+
+// observe is where the STATE surface and the AEL will attach; it exists now
+// so the corrected value is what they will see when they do.
+func (r *Runtime) observe(key DeviceKey, metrics map[string]float64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.lastState == nil {
+		r.lastState = map[DeviceKey]map[string]float64{}
+	}
+	r.lastState[key] = metrics
+}
+
+// LastState returns the most recent corrected state report for a device.
+func (r *Runtime) LastState(key DeviceKey) (map[string]float64, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	m, ok := r.lastState[key]
+	if !ok {
+		return nil, false
+	}
+	out := make(map[string]float64, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out, true
+}
+
+// QuirksFor reports which corrections a device is subject to, and what it
+// claimed before them — so an operator can review a correction rather than
+// take it on faith.
+func (r *Runtime) QuirksFor(key DeviceKey) (applied []string, rawCaps []string, ok bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	e, found := r.devices[key]
+	if !found {
+		return nil, nil, false
+	}
+	for _, q := range e.quirks.Quirks {
+		applied = append(applied, q.ID)
+	}
+	if e.raw != nil {
+		for _, c := range e.raw.AllCaps() {
+			rawCaps = append(rawCaps, c.ID)
+		}
+	}
+	return applied, rawCaps, true
 }
 
 // DiscoverAll asks every registered adapter that supports discovery to

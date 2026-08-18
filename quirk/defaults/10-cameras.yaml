@@ -1,0 +1,20 @@
+# Camera deviations.
+quirks:
+  - id: quirk.hikvision.ptz.decidegrees
+    note: >
+      Hikvision ISAPI reports PTZ bearings in tenths of a degree (azimuth
+      0..3600). The adapter already publishes normalised pan/tilt alongside
+      the native values; this labels the native ones with their real unit so
+      a consumer reading azimuth is not left guessing whether 1800 means
+      1800 degrees.
+    match: {vendor: Hikvision, protocol: isapi}
+    fixes:
+      - {type: unit, capability: ptz.position, unit: "0.1°"}
+
+  - id: quirk.dahua.ptz.limits
+    note: >
+      Dahua domes report a tilt beyond their mechanical range while parked,
+      which reads as a bearing the head cannot actually reach.
+    match: {vendor: Dahua, protocol: dahua-cgi}
+    fixes:
+      - {type: clamp, capability: ptz.position, metric: tilt_degrees, min: -15, max: 90}

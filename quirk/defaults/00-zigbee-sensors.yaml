@@ -1,0 +1,42 @@
+# Zigbee sensor deviations.
+#
+# Every entry here is a real, documented departure from the specification
+# the device claims to implement. The note is not decoration: a quirk with
+# no stated reason is indistinguishable from a bug someone introduced, and
+# six months later nobody can tell whether it is still needed.
+quirks:
+  - id: quirk.aqara.wsdcgq11lm.centidegrees
+    note: >
+      The Aqara/Lumi WSDCGQ11LM family reports temperature and humidity in
+      hundredths on the ZCL attribute, so 22.34 °C arrives as 2234. An
+      integration without this correction tells its user the room is 2234
+      degrees — which is the canonical demonstration of why this layer exists.
+    match: {vendor: "Aqara*", model: "WSDCGQ11LM*"}
+    fixes:
+      - {type: scale, capability: sensor.temperature, factor: 0.01}
+      - {type: scale, capability: sensor.humidity, factor: 0.01}
+      - {type: clamp, capability: sensor.temperature, min: -40, max: 85}
+
+  - id: quirk.lumi.wsdcgq11lm.centidegrees
+    note: Same hardware, registered under the Lumi vendor string on older stacks.
+    match: {vendor: "Lumi*", model: "WSDCGQ11LM*"}
+    fixes:
+      - {type: scale, capability: sensor.temperature, factor: 0.01}
+      - {type: scale, capability: sensor.humidity, factor: 0.01}
+
+  - id: quirk.tuya.ts0601.thermostat.decidegrees
+    note: >
+      Tuya TS0601 thermostats report temperature in tenths. The vendor
+      string is _TZE200_ plus a per-batch suffix, so the match is a prefix.
+    match: {vendor: "_TZE200_*", model: "TS0601*"}
+    fixes:
+      - {type: scale, capability: climate.temperature, factor: 0.1}
+      - {type: scale, capability: climate.setpoint, factor: 0.1}
+      - {type: clamp, capability: climate.setpoint, min: 5, max: 35}
+
+  - id: quirk.tuya.ts0601.thermostat.vendorname
+    note: Same product where the stack reports the plain "Tuya" vendor string.
+    match: {vendor: Tuya, model: "TS0601*"}
+    fixes:
+      - {type: scale, capability: climate.temperature, factor: 0.1}
+      - {type: scale, capability: climate.setpoint, factor: 0.1}

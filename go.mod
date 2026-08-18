@@ -3,7 +3,7 @@ module github.com/ANetResearch/ANetLink
 go 1.26.6
 
 require (
-	github.com/ANetResearch/ANetCore v0.4.1
+	github.com/ANetResearch/ANetCore v0.4.2
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/gopcua/opcua v0.9.1
 	github.com/gorilla/websocket v1.5.3
@@ -15,6 +15,7 @@ require (
 	go.einride.tech/can v0.17.0
 	golang.org/x/crypto v0.55.0
 	golang.org/x/net v0.58.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -44,6 +45,5 @@ require (
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	lukechampine.com/blake3 v1.1.6 // indirect
 )

@@ -62,6 +62,15 @@ type DeviceProfile struct {
 	// Endpoints models multi-facet devices (D50). Empty for single-endpoint
 	// devices, which use Caps directly.
 	Endpoints []Endpoint
+	// Firmware is the revision the device reports. It is here rather than
+	// in side metadata because quirk matching needs it (D03 §7.3): the same
+	// model on two firmwares genuinely behaves differently, and a
+	// correction that cannot be keyed on the revision either misses the
+	// devices that need it or corrupts the ones that do not.
+	//
+	// CID-significant, and absent ≡ "" so profiles that never set it keep
+	// the content ids they already have.
+	Firmware string
 }
 
 // AllCaps returns every capability the device exposes, flattening endpoints
@@ -114,6 +123,9 @@ func (p *DeviceProfile) Canonical() ([]byte, error) {
 	}
 	if p.AuthTrust != A0 {
 		obj[7] = uint64(p.AuthTrust) // auth axis; absent ≡ A0 (C-D1)
+	}
+	if p.Firmware != "" {
+		obj[9] = p.Firmware
 	}
 	if len(p.Endpoints) > 0 {
 		eps := make([]any, 0, len(p.Endpoints))

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ANetResearch/ANetLink/quirk"
 	"github.com/ANetResearch/ANetLink/runtime"
 )
 
@@ -25,6 +26,14 @@ import (
 type fileConfig struct {
 	BackendOverride map[string]string          `json:"backend_override,omitempty"`
 	Adapters        map[string]json.RawMessage `json:"adapters,omitempty"`
+	// QuirkDir adds site-local vendor corrections on top of the shipped
+	// ones (D03 §7). Declarative and hot-loadable by design: a correction
+	// for a newly-shipped batch of thermostats should be a file an operator
+	// drops in, not a release of this daemon.
+	QuirkDir string `json:"quirk_dir,omitempty"`
+	// NoDefaultQuirks disables the corrections shipped with the build, for
+	// an operator who would rather curate the whole set themselves.
+	NoDefaultQuirks bool `json:"no_default_quirks,omitempty"`
 }
 
 func loadConfig(path string) (*fileConfig, error) {
@@ -42,8 +51,22 @@ func loadConfig(path string) (*fileConfig, error) {
 	return &c, nil
 }
 
-func (c *fileConfig) runtimeConfig() runtime.Config {
-	return runtime.Config{BackendOverride: c.BackendOverride}
+func (c *fileConfig) runtimeConfig() (runtime.Config, error) {
+	reg := quirk.NewRegistry()
+	if !c.NoDefaultQuirks {
+		if _, err := reg.LoadDefaults(); err != nil {
+			return runtime.Config{}, fmt.Errorf("shipped quirks: %w", err)
+		}
+	}
+	if c.QuirkDir != "" {
+		// A quirk directory that does not load is an operator error worth
+		// stopping for: starting without the corrections they configured
+		// would silently publish wrong numbers.
+		if _, err := reg.LoadDir(c.QuirkDir); err != nil {
+			return runtime.Config{}, fmt.Errorf("quirk_dir %s: %w", c.QuirkDir, err)
+		}
+	}
+	return runtime.Config{BackendOverride: c.BackendOverride, Quirks: reg}, nil
 }
 
 // buildAdapters instantiates every compiled-in plugin that is configured
