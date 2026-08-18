@@ -12,6 +12,7 @@ package dahua
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,11 +28,22 @@ func realCamera(t *testing.T) DeviceConfig {
 	if addr == "" {
 		t.Skip("set ANETLINK_DAHUA_ADDR/_USER/_PASS to a real Dahua camera (L2: no simulator exists for the Dahua CGI)")
 	}
+	// Cameras behind a port map, and the ANetMock rig, serve RTSP somewhere
+	// other than 554. The vendor scheme only says where it usually is.
+	rtspPort := 0
+	if v := os.Getenv("ANETLINK_DAHUA_RTSP_PORT"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			t.Fatalf("ANETLINK_DAHUA_RTSP_PORT: %v", err)
+		}
+		rtspPort = n
+	}
 	return DeviceConfig{
-		ID:      "real-dh",
-		Address: addr,
-		User:    os.Getenv("ANETLINK_DAHUA_USER"),
-		Pass:    os.Getenv("ANETLINK_DAHUA_PASS"),
+		RTSPPort: rtspPort,
+		ID:       "real-dh",
+		Address:  addr,
+		User:     os.Getenv("ANETLINK_DAHUA_USER"),
+		Pass:     os.Getenv("ANETLINK_DAHUA_PASS"),
 	}
 }
 
