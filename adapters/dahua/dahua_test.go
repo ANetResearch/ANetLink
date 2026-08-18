@@ -782,3 +782,30 @@ func TestSystemInfoSurvivesAPartialAnswer(t *testing.T) {
 		t.Fatalf("evidence should name the model: %q", eff.Evidence.ObservedState)
 	}
 }
+
+// A camera that is down or has moved must not take the adapter — and with
+// it the daemon — out of service while other cameras are answering. The
+// deployed testbed daemon sat in a restart loop thousands deep because the
+// first camera in its config had moved to a different port.
+func TestProbeSurvivesADeadCameraAheadOfALiveOne(t *testing.T) {
+	cam := newFakeDahua(t)
+
+	av := nativeBackend{Config{
+		Timeout: 2 * time.Second,
+		Devices: []DeviceConfig{
+			// Port 1 is reserved and refuses immediately.
+			{ID: "dead", Address: "127.0.0.1:1", User: "admin", Pass: "pw"},
+			{ID: "live", Address: cam.host(), User: "admin", Pass: "pw"},
+		},
+	}}.Probe(context.Background())
+
+	if !av.Available {
+		t.Fatalf("a live camera behind a dead one must keep the adapter available: %s", av.Detail)
+	}
+	if !strings.Contains(av.Detail, "live") {
+		t.Errorf("the detail should name the camera that answered: %q", av.Detail)
+	}
+	if !strings.Contains(av.Detail, "did not answer") {
+		t.Errorf("the detail should report the ones that did not: %q", av.Detail)
+	}
+}

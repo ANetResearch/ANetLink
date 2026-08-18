@@ -108,14 +108,32 @@ func (b nativeBackend) Probe(ctx context.Context) sdk.Availability {
 	if len(b.cfg.Devices) == 0 {
 		return sdk.Availability{Available: true, Detail: "pure-Go Dahua CGI; no cameras configured"}
 	}
-	d := newDevice(b.cfg.Devices[0], b.cfg.Timeout)
-	kv, err := d.getKV(ctx, "/cgi-bin/magicBox.cgi?action=getDeviceType")
-	if err != nil {
-		return sdk.Availability{Available: false,
-			Detail: fmt.Sprintf("camera %s unreachable: %v", d.cfg.ID, err)}
+	// Ask each camera in turn and stop at the first that answers.
+	//
+	// Probing only Devices[0] made the whole adapter — and with it the
+	// daemon — unavailable whenever that one camera was down or had moved,
+	// however many others were answering. A camera going offline is the most
+	// ordinary event in a camera deployment: it is a device state, to be
+	// surfaced as an offline device, not a startup failure. Unavailable is
+	// reserved for nothing answering at all, which really does mean this
+	// adapter can do nothing.
+	var lastErr string
+	for i, dc := range b.cfg.Devices {
+		d := newDevice(dc, b.cfg.Timeout)
+		kv, err := d.getKV(ctx, "/cgi-bin/magicBox.cgi?action=getDeviceType")
+		if err != nil {
+			lastErr = fmt.Sprintf("camera %s unreachable: %v", d.cfg.ID, err)
+			continue
+		}
+		detail := fmt.Sprintf("pure-Go Dahua CGI; %s is a %s", d.cfg.ID, kv["type"])
+		if i > 0 {
+			detail += fmt.Sprintf(" (%d ahead of it did not answer; last: %s)", i, lastErr)
+		}
+		return sdk.Availability{Available: true, Detail: detail}
 	}
-	return sdk.Availability{Available: true,
-		Detail: fmt.Sprintf("pure-Go Dahua CGI; %s is a %s", d.cfg.ID, kv["type"])}
+	return sdk.Availability{Available: false,
+		Detail: fmt.Sprintf("no configured camera answered (%d tried; last: %s)",
+			len(b.cfg.Devices), lastErr)}
 }
 
 func (a *Adapter) Backends() []sdk.Backend { return []sdk.Backend{nativeBackend{a.cfg}} }
