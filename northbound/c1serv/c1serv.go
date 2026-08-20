@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/ANetResearch/ANetCore/coredet"
+	"github.com/ANetResearch/ANetCore/effect"
 	"github.com/ANetResearch/ANetLink/runtime"
 )
 
@@ -75,6 +76,18 @@ type invokeResp struct {
 }
 
 // evidenceWire mirrors effect.Evidence on the C1 wire.
+//
+// Every field, keyed to match effect.Evidence, and Quirk is the one that
+// makes the list load-bearing. The runtime stamps it whenever a correction
+// changed a reading, because a corrected value is not the value the device
+// put on the wire — and this struct was missing it, so the label stopped
+// here. The consumer north of C1 saw the corrected number and no way to
+// learn it had been corrected, which is the single thing the quirk layer
+// is built to prevent: a correction reaches every surface or none.
+//
+// Adding a field to effect.Evidence means adding it here. There is no
+// mechanical guard for that; TestEveryEvidenceFieldCrossesTheWire is what
+// catches it.
 type evidenceWire struct {
 	Requested     string `json:"requested,omitempty" cbor:"1,keyasint,omitempty"`
 	Protocol      string `json:"protocol,omitempty" cbor:"2,keyasint,omitempty"`
@@ -83,6 +96,23 @@ type evidenceWire struct {
 	LatencyMS     int64  `json:"latency_ms,omitempty" cbor:"5,keyasint,omitempty"`
 	VerifyTrust   uint8  `json:"verify_trust,omitempty" cbor:"6,keyasint,omitempty"`
 	AuthTrust     uint8  `json:"auth_trust,omitempty" cbor:"7,keyasint,omitempty"`
+	Quirk         string `json:"quirk,omitempty" cbor:"8,keyasint,omitempty"`
+}
+
+// wireEvidence maps provenance onto the wire. A function rather than an
+// inline literal so a test can hold it against effect.Evidence field by
+// field: this mapping silently dropped Quirk, and an inline literal is
+// exactly the shape nothing can check.
+func wireEvidence(ev *effect.Evidence) *evidenceWire {
+	if ev == nil {
+		return nil
+	}
+	return &evidenceWire{
+		Requested: ev.Requested, Protocol: ev.Protocol, NativeAck: ev.NativeAck,
+		ObservedState: ev.ObservedState, LatencyMS: ev.LatencyMS,
+		VerifyTrust: ev.VerifyTrust, AuthTrust: ev.AuthTrust,
+		Quirk: ev.Quirk,
+	}
 }
 
 // Handler builds the C1 HTTP handler over a started runtime.
@@ -141,13 +171,7 @@ func Handler(rt *runtime.Runtime) http.Handler {
 		if eff.Record != nil {
 			resp.Metrics = eff.Record.Metrics
 		}
-		if ev := eff.Evidence; ev != nil {
-			resp.Evidence = &evidenceWire{
-				Requested: ev.Requested, Protocol: ev.Protocol, NativeAck: ev.NativeAck,
-				ObservedState: ev.ObservedState, LatencyMS: ev.LatencyMS,
-				VerifyTrust: ev.VerifyTrust, AuthTrust: ev.AuthTrust,
-			}
-		}
+		resp.Evidence = wireEvidence(eff.Evidence)
 		if wantsCBOR(r) {
 			b, err := coredet.Marshal(resp)
 			if err != nil {
