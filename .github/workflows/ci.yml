@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        tags: ["onvif", "hikvision", "dahua", "onvif,hikvision,dahua"]
+        tags: ["onvif", "hikvision", "dahua", "adap", "onvif,hikvision,dahua,adap"]
     env:
       CGO_ENABLED: "0"
     steps:

@@ -32,7 +32,7 @@ type adapterPlugin struct {
 
 // additiveTags names the adapters that must be asked for at build time, so
 // a misconfiguration can point at the right fix instead of the wrong one.
-var additiveTags = map[string]bool{"onvif": true, "hikvision": true, "dahua": true}
+var additiveTags = map[string]bool{"onvif": true, "hikvision": true, "dahua": true, "adap": true}
 
 var plugins []adapterPlugin
 
