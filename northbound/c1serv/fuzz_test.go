@@ -62,6 +62,12 @@ func FuzzC1Decode(f *testing.F) {
 			t.Fatalf("accepted via %d", *req.Caller.Via)
 		}
 
+		// The arguments the adapters will see are shaped without panicking,
+		// and their keys stay the keys that arrived.
+		if shaped := jsonShapedArgs(req.Args); len(shaped) != len(req.Args) {
+			t.Fatalf("shaping changed the argument count: %d -> %d", len(req.Args), len(shaped))
+		}
+
 		// An accepted request survives a round trip through the encoder
 		// unchanged. The encoder may refuse (NaN in args is decodable but
 		// not encodable under CoreDet); it may not change the meaning.
