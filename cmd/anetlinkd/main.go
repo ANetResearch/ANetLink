@@ -1,6 +1,10 @@
-// anetlinkd is the ANetLink runtime daemon. v0: boots the runtime with the
-// sim adapter, prints the device inventory, and (with --demo) proves the
-// invoke path end to end. The MCP surface and the C1 shim come next.
+// anetlinkd is the ANetLink runtime daemon. It boots the runtime with the
+// configured adapters and serves them north:
+//
+//	anetlinkd [--config F]          service mode: C1 v1 for the anet daemon
+//	                                on $XDG_RUNTIME_DIR/anetlink/c1.sock
+//	anetlinkd --mcp                 MCP on stdio (C1 too, if a socket is set)
+//	anetlinkd --demo|--scan|--pair  one-shot commands
 package main
 
 import (
@@ -8,7 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"os"
+	"net"
 	"os/signal"
 	"syscall"
 
@@ -19,7 +23,8 @@ import (
 	"github.com/ANetResearch/ANetLink/runtime"
 )
 
-const version = "0.1.0"
+// version 0.2.0 speaks C1 v1 (CBOR only, /v1/*); a C1 v0 client gets 426.
+const version = "0.2.0"
 
 func main() {
 	demo := flag.Bool("demo", false, "run one demo invocation and exit")
@@ -28,7 +33,10 @@ func main() {
 	scan := flag.Bool("scan", false, "discover devices on the connected networks and print a suggested config")
 	pair := flag.Duration("pair", 0, "open pairing-capable networks for this long (e.g. 60s) and report what joins")
 	scanOut := flag.String("scan-out", "", "with --scan, write the suggested config to this file")
-	c1Socket := flag.String("c1-socket", "", "serve the C1 provider wire on this unix socket (for the ANet daemon shim)")
+	var c1f c1Flags
+	flag.StringVar(&c1f.socket, "c1-socket", "", "serve C1 for the anet daemon on this unix socket (default $XDG_RUNTIME_DIR/anetlink/c1.sock; config c1.socket)")
+	flag.Var(&c1f.allowUsers, "c1-allow-user", "let this user (name or uid) connect to the C1 socket, besides anetlinkd's own; repeatable (config c1.allow_users)")
+	flag.StringVar(&c1f.group, "c1-group", "", "group that opens the C1 socket to the allowed users (config c1.group)")
 	flag.Parse()
 
 	cfg, err := loadConfig(*configPath)
@@ -53,6 +61,26 @@ func main() {
 		}
 	}
 	log.Printf("adapters compiled+configured: %s", adapterNames(adapters))
+
+	// C1 serves the daemon in service mode, and in --mcp mode only when a
+	// socket is configured: an IDE's anetlinkd --mcp must not fight a
+	// service anetlinkd for the default socket. The socket is prepared
+	// before the adapters start, so a refusal (untrusted directory,
+	// unknown user, a socket in use) stops the start at once; connections
+	// wait in the backlog until the runtime is ready.
+	c1opts := cfg.c1Options(c1f)
+	var c1ln net.Listener
+	if !*demo && !*scan && *pair == 0 && (c1opts.Socket != "" || !*serveMCP) {
+		if c1opts.Socket == "" {
+			if c1opts.Socket, err = c1serv.DefaultSocket(); err != nil {
+				log.Fatalf("anetlinkd: %v", err)
+			}
+		}
+		if c1ln, err = c1serv.Listen(c1opts); err != nil {
+			log.Fatalf("anetlinkd: %v", err)
+		}
+	}
+
 	ctx := context.Background()
 	if err := rt.Start(ctx); err != nil {
 		log.Fatalf("anetlinkd: %v", err)
@@ -90,18 +118,24 @@ func main() {
 		return
 	}
 
-	if *c1Socket != "" {
-		go func() {
-			if err := c1serv.Serve(ctx, rt, *c1Socket); err != nil {
-				log.Fatalf("anetlinkd: c1: %v", err)
-			}
-		}()
-		log.Printf("c1 provider wire on %s", *c1Socket)
+	sigCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	c1done := make(chan error, 1)
+	if c1ln != nil {
+		go func() { c1done <- c1serv.Serve(sigCtx, rt, c1ln, nil) }()
+		log.Printf("c1 v1 on %s (other users allowed: %d; capabilities open to remote callers: %d pattern(s))",
+			c1opts.Socket, len(c1opts.AllowUsers), len(rtCfg.Remote))
 	}
 
 	if *serveMCP {
 		// stdio belongs to the MCP session; logs already go to stderr.
-		if err := mcpserv.New(rt, version).Run(ctx, &mcp.StdioTransport{}); err != nil {
+		err := mcpserv.New(rt, version).Run(sigCtx, &mcp.StdioTransport{})
+		interrupted := sigCtx.Err() != nil
+		stop()
+		if c1ln != nil {
+			<-c1done // the socket is removed before we exit
+		}
+		if err != nil && !interrupted {
 			log.Fatalf("anetlinkd: mcp: %v", err)
 		}
 		return
@@ -112,10 +146,10 @@ func main() {
 			fmt.Println("demo: no devices (sim compiled out or disabled) — inventory empty, exiting 0")
 			return
 		}
-		d0 := rt.Devices()[0]
-		key := runtime.DeviceKey{Adapter: d0.Profile.Protocol, Device: d0.ID}
+		e0 := rt.Inventory()[0]
+		d0, key := e0.Device, e0.Key
 		capID := d0.Profile.Caps[0].ID
-		eff, err := rt.Invoke(ctx, key, capID, map[string]any{"on": true})
+		eff, err := rt.Invoke(ctx, runtime.Caller{Via: runtime.ViaLocal}, key, capID, map[string]any{"on": true})
 		if err != nil {
 			log.Fatalf("anetlinkd: demo invoke: %v", err)
 		}
@@ -124,7 +158,15 @@ func main() {
 		return
 	}
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
+	if c1ln == nil {
+		<-sigCtx.Done()
+		return
+	}
+	select {
+	case <-sigCtx.Done():
+		<-c1done // the socket is removed before we exit
+	case err := <-c1done:
+		// Service mode exists to serve C1; without it there is nothing to do.
+		log.Fatalf("anetlinkd: c1 stopped: %v", err)
+	}
 }

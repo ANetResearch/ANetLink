@@ -2,7 +2,7 @@
 
 > 把物理世界变成 ANet 能力。一份从零到能控真实设备的完整指南。
 >
-> 适用版本：anet4 开发线（2026-08）。协议内核见 [ANetCore](https://github.com/ANetResearch/ANetCore)；
+> 适用版本：ANetLink 0.2.0（C1 v1，2026-10）。协议内核见 [ANetCore](https://github.com/ANetResearch/ANetCore)；
 > 设计总纲见 anet 母仓 K207，本手册是面向使用者的操作视角。
 
 ---
@@ -64,6 +64,10 @@ CGO_ENABLED=0 go build -o anetlinkd ./cmd/anetlinkd
 
 # 3. 作为 MCP 服务给 Claude/IDE 用（stdio）
 ./anetlinkd --mcp
+
+# 4. 作为服务给本机 anet daemon 用（C1，见 §7.2）
+./anetlinkd
+# c1 v1 on /run/user/1000/anetlink/c1.sock (other users allowed: 0; …)
 ```
 
 在 Claude Code 里把它注册为 MCP server（`claude mcp add anetlink -- /path/to/anetlinkd --mcp`），
@@ -205,6 +209,12 @@ CGO_ENABLED=0 go build -tags no_mqtt,no_ha -o anetlinkd-min ./cmd/anetlinkd
       "url": "ws://homeassistant.local:8123/api/websocket",
       "token": "<long-lived access token>"
     }
+  },
+
+  "c1": {
+    "socket": "/run/anetlink/c1.sock",
+    "allow_users": ["anet"],
+    "remote": ["light.onoff@sim/*"]
   }
 }
 ```
@@ -216,8 +226,12 @@ CGO_ENABLED=0 go build -tags no_mqtt,no_ha -o anetlinkd-min ./cmd/anetlinkd
 - **配置了未编译进本二进制的适配器 = 响亮报错**。裁掉了 `mqtt` 却在 config 写 `mqtt` 段，
   启动直接失败并提示 `no_mqtt?`——绝不静默失能力。
 - `access` 是三比特整数：STATE=1、SET=2、GET=4，按位或。可写可读的开关 = 6。
+- `c1` 段管给 anet daemon 的 C1 socket：路径、允许连接的其他用户、远端调用方可用的能力。
+  四个键（`socket`、`allow_users`、`group`、`remote`）与缺省值见 §7.2；**缺省全部关闭**，
+  写错键名直接报错，不会静默生效成别的意思。
 
-启动：`./anetlinkd --config config.json --mcp`（或 `--c1-socket /run/anetlink.sock` 接 daemon）。
+启动：`./anetlinkd --config config.json`（服务模式，给 daemon 走 C1）或
+`./anetlinkd --config config.json --mcp`（给 Claude/IDE 走 MCP）。
 
 ---
 
@@ -430,37 +444,103 @@ Thread 是**承载**不是应用协议,经 Border Router 触达设备。
 
 ## 7. 北向接口：MCP 与 C1
 
-**北向只有一个能力面。** 两种消费方式，同一批设备与效果：
+**北向只有一个能力面。** 两种消费方式，同一批设备与效果。谁能调用什么，只在运行时
+（`runtime.Invoke`）判定一次，两个入口对同一调用方给出同样的回答。
 
 ### 7.1 MCP（给 Claude / IDE）
-`anetlinkd --mcp` 在 stdio 上起一个 MCP server，两个工具：
+`anetlinkd --mcp` 在 stdio 上起一个 MCP server，四个工具：
 
-| 工具 | 作用 |
-|---|---|
-| `devices_list` | 列出所有设备：key、协议、在线态、信任级、可调能力、Profile CID |
-| `device_invoke` | 调用一个能力，返回诚实效果（status/verifiable/metrics/message） |
+| 工具 | 作用 | 标注 |
+|---|---|---|
+| `devices_list` | 列出所有设备：key、协议、在线态、信任级、可调能力、Profile CID | 只读 |
+| `device_invoke` | 调用一个能力，返回诚实效果（status/verifiable/metrics/message/evidence） | 有破坏性、开放世界 |
+| `devices_discover` | 扫描已连接的网络，列出尚未配置的设备与建议配置 | 只读、开放世界 |
+| `devices_pair` | 开放支持入网的网络一段时间，报告谁加入了 | 有破坏性、开放世界 |
 
-设备 key 形如 `sim/lamp-1`（`<协议>/<设备ID>`）。这是**冷启动钩子**：零 hub 零 daemon，
+设备 key 形如 `sim/lamp-1`（`<适配器>/<设备ID>`）。这是**冷启动钩子**：零 hub 零 daemon，
 Claude 直接控设备。
 
-### 7.2 C1（给 anet daemon）
-`anetlinkd --c1-socket /run/anetlink.sock` 在 Unix socket 上起 C1 wire（HTTP over UDS）：
+> **注意**：`device_invoke` 与 `devices_pair` 会改动物理世界。不要让同一个 MCP 客户端在
+> 无人确认的情况下同时接入 anet 与 anetlink：anet 会把其他 agent 发来的文本交给它，
+> 对方的一段文字就可能让它去开门。MCP 客户端按上表的标注请你确认时，请保留这道确认。
 
+### 7.2 C1 v1（给 anet daemon）
+
+`anetlinkd` 不带 `--mcp` 时以服务模式运行，在 Unix socket 上起 C1 v1（HTTP over UDS，
+请求头 `Host: anetlink`）。socket 缺省为 `$XDG_RUNTIME_DIR/anetlink/c1.sock`，与 anet 的
+`modules.anetlink.socket` 缺省相同，两边都不配也能连上。`--mcp` 模式下只有显式给了
+socket 才同时服务 C1，免得与服务模式的 anetlinkd 抢同一个 socket。
+
+请求与响应体只用 CoreDet-CBOR（`Content-Type: application/cbor`），键号见 ANetCore
+协议核心的 C1 v1 键位表：
+
+| 方法与路径 | 成功 | 说明 |
+|---|---|---|
+| `GET /v1/health` | 204 | |
+| `GET /v1/capabilities` | 200 `{1: [{1: id, 2: remote}, …]}` | `remote`：1 表示远端调用方可用，0 表示只限本机 |
+| `GET /v1/describe` | 200 `{1: cid}` | 空串表示还没有设备目录对象 |
+| `POST /v1/invoke` | 200 `{1: status, 2?: metrics, 3?: message, 4?: evidence}` | 请求 `{1: capability, 2?: args, 3?: call_id, 5: caller}`，`caller = {1: via, 2?: aid}`：`via` 为 0 表示本机，为 1 表示经 anet 中继的远端，此时必带 daemon 核实过的 `aid` |
+| 任何 `/v0/*` | 426 | 旧版客户端得到 `c1_version` |
+| 其他 | 404 | `not_found` |
+
+拒绝一律回 `{1: reason}`，只带原因码；细节只写 anetlinkd 本地日志：
+
+| reason | HTTP | 含义 |
+|---|---|---|
+| `not_permitted` | 403 | 远端调用方（`via = 1`）调用的能力不匹配 `c1.remote` |
+| `bad_request` | 400 | 请求体不是合法的 C1 v1：未登记的键、退役的键（`InvokeReq` 键 4、`Caller` 键 3）、重复的键、CBOR 标签、非法 UTF-8、`via` 与 `aid` 不相配 |
+| `too_large` | 413 | 请求体超过 1 MiB |
+| `unsupported_media` | 415 | 不是 `application/cbor`（C1 v1 不再接受 JSON） |
+| `unknown_capability` | 404 | 设备不存在、没有声明该能力，或该能力只能观察不能调用 |
+| `c1_version` | 426 | 客户端说的是 C1 v0：把 anet 与 ANetLink 升级到同一发布 |
+| `not_found` | 404 | 没有这个路由 |
+| `internal` | 500 | 适配器出错，或响应无法编码 |
+
+设备离线不是拒绝：回 200，`status` 为 `UNAVAILABLE`。
+
+能力 id 形如 `light.onoff@sim/lamp-1`（`<能力>@<适配器>/<设备>`），**只在 ANetLink 侧铸造/
+解析**——daemon 永远不知道"设备"这个概念，只知道"某能力可被调用"（这是 C1 红线）。
+文件不经 C1：带文件的能力只能由 anet 的 service 模块提供。
+
+**谁能连、谁能调**（缺省全部关闭）：
+
+| 配置键 | 命令行 | 缺省 | 作用 |
+|---|---|---|---|
+| `c1.socket` | `--c1-socket` | `$XDG_RUNTIME_DIR/anetlink/c1.sock` | socket 路径 |
+| `c1.allow_users` | `--c1-allow-user`（可重复） | 空：只允许 anetlinkd 自身用户 | 允许连接的其他用户（用户名或数字 uid）；root 不隐含放行 |
+| `c1.group` | `--c1-group` | 不设 | 把 socket 开给这些用户的组；只有一个其他用户时缺省取其主组，多于一个时必填 |
+| `c1.remote` | — | 空：全部能力拒绝远端调用 | 远端调用方可用的能力，`path.Match` 模式，对完整 id 匹配 |
+
+命令行优先于配置文件。`c1.remote` 里的 `*` 不跨 `/`：`light.onoff@sim/*` 放行 sim 上每台设备
+的开关，`*@sim/lamp-1` 放行这盏灯的全部能力，`*/*` 放行全部（慎用）。按 AID 的授权只在
+anet daemon 的名单里做；ANetLink 只有这一个远端开关。anet 公开了某个能力而 `c1.remote`
+没有放行它时，`anet doctor` 的 `anetlink.publish` 会提醒，远端调用方得到 `provider_policy`。
+
+anetlinkd 启动时：
+- socket 所在目录不存在则以 0700 创建；已存在则属主必须是自身或 root，且组与其他用户
+  都不可写，否则拒绝启动（谁能写这个目录，谁就能换掉 socket）；已存在的目录不改权限；
+- socket 路径不得是符号链接；已有进程在监听时拒绝启动，无人监听的陈旧 socket 自动删除；
+- socket 为 0600；`allow_users` 里有其他用户时为 0660 并归属 `c1.group`，anetlinkd 自己
+  创建的目录同时改为 0710，让该组可以进入；
+- 每个连接在读任何字节之前核对对端 uid（Linux 用 `SO_PEERCRED`，macOS 与 FreeBSD 用
+  `LOCAL_PEERCRED`），不在 {自身} ∪ `allow_users` 中即断开，日志每个 uid 每分钟至多一条：
+  `拒绝 uid {n} 连接 c1.sock(不在 allow_users 中);如需允许,在 ANetLink 配置 c1.allow_users 加入该用户。`
+- 其他平台读不到对端 uid，C1 不服务，anetlinkd 拒绝启动。
+
+每次调用（C1 与 MCP 都算）在本地日志记一行 `invoke via=… aid=… cap=… result=…`，不记参数。
+
+**daemon 侧配置**（ANet 仓 config.json）：两边都用缺省路径、以同一用户运行时什么都不用配。
+anetlinkd 以另一用户运行（例如 root，为了直接访问硬件）时：
+
+```bash
+anetlinkd --config config.json --c1-socket /run/anetlink/c1.sock --c1-allow-user anet
 ```
-GET  /v0/health        → 204
-GET  /v0/capabilities  → {"capabilities": ["light.onoff@sim/lamp-1", ...]}
-POST /v0/invoke        {"capability":"...","args":{...}} → effect
-```
-
-能力 id 形如 `light.onoff@sim/lamp-1`，**只在 ANetLink 侧铸造/解析**——daemon 永远不
-知道"设备"这个概念，只知道"某能力可被调用"（这是 C1 红线）。
-
-daemon 侧配置（ANet 仓 config.json）：
 ```json
-{ "providers": { "anetlink": { "socket": "/run/anetlink.sock" } } }
+{ "modules": { "anetlink": { "socket": "/run/anetlink/c1.sock", "expected_user": "root" } } }
 ```
-之后 daemon 收到能力型委派会经 provider 注册表确定性执行，效果即交付物 + 签名回执，
-并写入本地 AEL 证据链。
+
+`expected_user` 让 daemon 在连接时核对监听者确实是 anetlinkd 的用户。之后 daemon 收到能力型
+委派会经 provider 注册表确定性执行，效果即交付物 + 签名回执，并写入本地 AEL 证据链。
 
 ---
 
@@ -590,6 +670,14 @@ source test/realworld/env
 | 效果总是 UNVERIFIED | 设备信任级 < T2（云 API），或读回/事件没到。这是**诚实行为不是 bug**——命令发了但验证不了 |
 | Matter 灯发现不到 | 配对窗 15 分钟制（Matter 规范），过期 `docker restart anetlink-matter` 重开新窗口 |
 | `--demo` 输出 no devices | sim 被 `no_sim` 裁掉或 config 关闭。这是预期的优雅退化 |
+| `c1: … is writable by other users` | C1 socket 所在目录可被他人写，谁都能换掉 socket。`chmod go-w <目录>` 或换一个目录 |
+| `c1: … is in use by another process` | 已有进程（多半是另一个 anetlinkd）在这个 socket 上。停掉它，或用 `--c1-socket` 换路径 |
+| `c1: XDG_RUNTIME_DIR is not set` | 服务模式找不到缺省 socket 路径。加 `--c1-socket /run/anetlink/c1.sock`，daemon 侧 `modules.anetlink.socket` 设同一路径 |
+| `c1: the users in c1.allow_users cannot enter …` | 已存在的 socket 目录不让允许的用户进入。删掉该目录让 anetlinkd 重建，或按提示 `chgrp` 与 `chmod 0710` |
+| 日志 `c1_uid_refused` | 有用户连 c1.sock 但不在 `c1.allow_users` 中。确实需要时把该用户加入 `c1.allow_users` |
+| daemon 报 `c1_version` | anet 与 ANetLink 的 C1 版本不同。把两者升级到同一发布（ANetLink 0.2.0 起为 C1 v1） |
+| 远端调用方得到 `provider_policy` | 该能力不匹配 `c1.remote`。在 `c1.remote` 放行它，或在 anet 里不公开它 |
+| `adap: allow_uid was removed` | 0.2.0 起 ADAP socket 只接受 anetlinkd 自身用户。以同一用户运行适配器进程并删掉 `allow_uid` |
 
 **日志**：`anetlinkd` 启动时打印编译进的适配器、每个适配器选中的后端、设备清单与 CID。
 `--mcp` 模式下日志走 stderr（stdout 归 MCP 会话）。
@@ -658,10 +746,14 @@ func (a *Adapter) Invoke(ctx context.Context, call sdk.Call) (effect.Effect, err
 **命令行**：
 ```
 anetlinkd [flags]
-  --config <path>       JSON 配置文件
-  --mcp                 在 stdio 上服务 MCP 北向
-  --c1-socket <path>    在 unix socket 上服务 C1 provider wire
-  --demo                跑一次 demo invoke 后退出
+  --config <path>          JSON 配置文件
+  --mcp                    在 stdio 上服务 MCP 北向
+  --c1-socket <path>       C1 socket 路径（缺省 $XDG_RUNTIME_DIR/anetlink/c1.sock；服务模式自动启用）
+  --c1-allow-user <name>   允许该用户（用户名或 uid）连接 C1 socket，可重复
+  --c1-group <group>       把 C1 socket 开给允许用户的组
+  --demo                   跑一次 demo invoke 后退出
+  --scan [--scan-out F]    扫描已连接的网络，打印或写出建议配置
+  --pair <dur>             开放入网一段时间，报告谁加入了
 ```
 
 **包地图**（14 个包）：
@@ -676,7 +768,8 @@ adapters/
   habridge/         Home Assistant WebSocket 桥
 northbound/
   mcpserv/          MCP 北向（devices_list / device_invoke）
-  c1serv/           C1 provider wire（HTTP over UDS）
+  c1serv/           C1 v1（CoreDet-CBOR，HTTP over UDS）
+internal/peercred/  Unix socket 对端核实与 socket 目录规则
 matter/             纯 Go Matter 栈（在建）
   tlv/              TLV 编解码（规范附录 A）
   disc/             mDNS 可配对发现（_matterc._udp）

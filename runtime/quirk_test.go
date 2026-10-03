@@ -110,7 +110,7 @@ func TestCorrectionReachesEverySurface(t *testing.T) {
 	}
 
 	// 2. invoke
-	eff, err := rt.Invoke(context.Background(), key, "sensor.temperature", nil)
+	eff, err := rt.Invoke(context.Background(), local, key, "sensor.temperature", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestWithoutQuirksNothingChanges(t *testing.T) {
 	}
 	defer rt.Stop(context.Background())
 
-	eff, err := rt.Invoke(context.Background(), DeviceKey{"fake", "sensor-1"}, "sensor.temperature", nil)
+	eff, err := rt.Invoke(context.Background(), local, DeviceKey{"fake", "sensor-1"}, "sensor.temperature", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestQuirksNeverRaiseTrustThroughTheRuntime(t *testing.T) {
 	}
 	defer rt.Stop(context.Background())
 
-	eff, err := rt.Invoke(context.Background(), DeviceKey{"fake", "sensor-1"}, "sensor.temperature", nil)
+	eff, err := rt.Invoke(context.Background(), local, DeviceKey{"fake", "sensor-1"}, "sensor.temperature", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

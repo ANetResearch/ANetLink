@@ -1,7 +1,5 @@
 filippo.io/edwards25519 v1.2.0 h1:crnVqOiS4jqYleHd9vaKZ+HKtHfllngJIiOpNpoJsjo=
 filippo.io/edwards25519 v1.2.0/go.mod h1:xzAOLCNug/yB62zG1bQ8uziwrIqIuxhctzJT18Q77mc=
-github.com/ANetResearch/ANetCore v0.4.1 h1:xXVZH8mgp023FxV1Oef3de6Q1tRu74GPUFqdXM8173s=
-github.com/ANetResearch/ANetCore v0.4.1/go.mod h1:XM6jAq55gxbkyVBWGj6N8ko0A5XkoSoQp5w2XSttN1E=
 github.com/ANetResearch/ANetCore v0.4.2 h1:u1W8DmSY3QfH7cvHtfBrm8ycJWdTfFP2ZI0mvwtP7To=
 github.com/ANetResearch/ANetCore v0.4.2/go.mod h1:XM6jAq55gxbkyVBWGj6N8ko0A5XkoSoQp5w2XSttN1E=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=

@@ -6,8 +6,13 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
+	"path"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +32,78 @@ type Config struct {
 	// corrections, which is the right default: a quirk that nobody loaded
 	// must never be assumed.
 	Quirks *quirk.Registry
+	// Remote lists the capabilities a remote caller (Caller.Via == relay)
+	// may invoke, as path.Match patterns over the full id
+	// "<capability>@<adapter>/<device>" (configuration key c1.remote).
+	// Empty means none: a device is reachable from the network only when
+	// its operator said so by name (SI-62). Check patterns with
+	// ValidateRemote; one that does not parse matches nothing.
+	Remote []string
+	// Logf receives one line per invocation (who, which capability, how it
+	// ended; never the arguments). Nil means log.Printf.
+	Logf func(format string, args ...any)
+}
+
+// Via says which surface a call came in through. The policy is keyed on
+// it, so it lives here rather than in any one northbound package: the
+// runtime is the single path to an adapter, and a rule enforced by only
+// one of its entrances is a rule the other entrances skip.
+type Via string
+
+const (
+	// ViaLocal is a caller on this machine speaking C1 (the anet daemon
+	// acting for its own user: CLI, MCP or control plane).
+	ViaLocal Via = "local"
+	// ViaLocalMCP is ANetLink's own MCP surface (devices_*, device_invoke).
+	ViaLocalMCP Via = "local-mcp"
+	// ViaRelay is a remote agent whose identity the anet daemon verified
+	// and relayed over C1. Only capabilities matching Config.Remote serve it.
+	ViaRelay Via = "relay"
+)
+
+// Caller identifies who asked for an invocation.
+type Caller struct {
+	Via Via
+	// AID is the remote agent the daemon verified; set only for ViaRelay.
+	AID string
+}
+
+var (
+	// ErrNotPermitted: this caller may not invoke this capability (C1
+	// not_permitted).
+	ErrNotPermitted = errors.New("runtime: not permitted")
+	// ErrUnknownCapability: no such device, the device does not declare
+	// the capability, or the capability cannot be invoked (C1
+	// unknown_capability).
+	ErrUnknownCapability = errors.New("runtime: unknown capability")
+)
+
+// CapabilityID is the full id of one device capability,
+// "<capability>@<adapter>/<device>". It is the form C1 publishes and the
+// form Config.Remote patterns are matched against; northbound packages
+// mint ids through this function so the two can never disagree.
+func CapabilityID(capability string, key DeviceKey) string {
+	return capability + "@" + key.String()
+}
+
+// ValidateRemote checks c1.remote patterns at startup. A pattern that does
+// not parse, or that has no "/" and so can never match an id, is a
+// configuration error worth stopping for: the operator meant to open
+// something and nothing would be open.
+func ValidateRemote(patterns []string) error {
+	for _, p := range patterns {
+		if p == "" {
+			return fmt.Errorf("c1.remote has an empty pattern; remove it or write one like \"light.onoff@sim/*\"")
+		}
+		if _, err := path.Match(p, ""); err != nil {
+			return fmt.Errorf("c1.remote pattern %q is not a valid pattern (%v); patterns use * ? and [...] as in path.Match", p, err)
+		}
+		if !strings.Contains(p, "/") {
+			return fmt.Errorf("c1.remote pattern %q can never match, because ids look like <capability>@<adapter>/<device>; "+
+				"write for example \"%s@*/*\"", p, p)
+		}
+	}
+	return nil
 }
 
 // DeviceKey is the runtime-global device address: adapter name + device id.
@@ -145,28 +222,91 @@ func (r *Runtime) Devices() []sdk.Device {
 	return out
 }
 
+// Entry is one device together with the key the runtime knows it by.
+type Entry struct {
+	Key    DeviceKey
+	Device sdk.Device
+}
+
+// Inventory lists the current devices with their keys, sorted by key. The
+// key is what Invoke resolves and what capability ids are minted from;
+// northbound listings use it rather than rebuilding a key from the
+// profile, whose protocol is not always the adapter's name.
+func (r *Runtime) Inventory() []Entry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]Entry, 0, len(r.devices))
+	for k, e := range r.devices {
+		out = append(out, Entry{Key: k, Device: e.dev})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key.String() < out[j].Key.String() })
+	return out
+}
+
+// RemoteAllowed reports whether a remote caller may invoke the capability
+// with this full id: whether it matches a Config.Remote pattern.
+func (r *Runtime) RemoteAllowed(id string) bool {
+	for _, p := range r.cfg.Remote {
+		if ok, err := path.Match(p, id); err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
+// permit is the caller policy (AL-7). Local surfaces are served; a relay
+// caller only for capabilities its operator opened with c1.remote, and only
+// when it says who it is; anything else is refused rather than guessed at.
+func (r *Runtime) permit(c Caller, id string) error {
+	switch c.Via {
+	case ViaLocal, ViaLocalMCP:
+		return nil
+	case ViaRelay:
+		if c.AID == "" {
+			return fmt.Errorf("%w: a remote call must name its caller", ErrNotPermitted)
+		}
+		if !r.RemoteAllowed(id) {
+			return fmt.Errorf("%w: %s is not open to remote callers (no c1.remote match)", ErrNotPermitted, id)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: unknown caller kind %q", ErrNotPermitted, c.Via)
+	}
+}
+
 // Invoke routes one capability call to the owning adapter and enforces the
-// trust rules on the way back: an effect may only claim OK (verifiable) if
-// the device's trust level admits verification (profile.VerifiableFrom) —
-// adapters and quirks cannot raise trust, only the profile ceiling counts.
-func (r *Runtime) Invoke(ctx context.Context, key DeviceKey, capability string, args map[string]any) (effect.Effect, error) {
+// rules on the way: first the caller policy (decided before the device
+// table is consulted, so a remote caller cannot probe which devices exist),
+// then the trust rules on the way back: an effect may only claim OK
+// (verifiable) if the device's trust level admits verification
+// (profile.VerifiableFrom) — adapters and quirks cannot raise trust, only
+// the profile ceiling counts.
+//
+// Every northbound surface calls this; none reaches an adapter any other
+// way. That is what makes the policy hold for all of them.
+func (r *Runtime) Invoke(ctx context.Context, caller Caller, key DeviceKey, capability string, args map[string]any) (eff effect.Effect, err error) {
+	id := CapabilityID(capability, key)
+	defer func() { r.logInvoke(caller, id, eff, err) }()
+	if err := r.permit(caller, id); err != nil {
+		return effect.Effect{}, err
+	}
 	r.mu.RLock()
 	e, ok := r.devices[key]
 	r.mu.RUnlock()
 	if !ok {
-		return effect.Effect{}, fmt.Errorf("runtime: unknown device %s", key)
+		return effect.Effect{}, fmt.Errorf("%w: unknown device %s", ErrUnknownCapability, key)
 	}
 	if !e.dev.Online {
 		return effect.Effect{Status: effect.Unavailable, Message: "device offline"}, nil
 	}
 	cap_, declared := e.dev.Profile.Find(capability)
 	if !declared {
-		return effect.Effect{}, fmt.Errorf("runtime: device %s does not declare %q", key, capability)
+		return effect.Effect{}, fmt.Errorf("%w: device %s does not declare %q", ErrUnknownCapability, key, capability)
 	}
 	if cap_.Access&(profile.AccessSet|profile.AccessGet) == 0 {
-		return effect.Effect{}, fmt.Errorf("runtime: capability %q is not invokable (STATE-only)", capability)
+		return effect.Effect{}, fmt.Errorf("%w: capability %q is not invokable (STATE-only)", ErrUnknownCapability, capability)
 	}
-	eff, err := e.adapter.Invoke(ctx, sdk.Call{DeviceID: key.Device, Capability: capability, Args: args})
+	eff, err = e.adapter.Invoke(ctx, sdk.Call{DeviceID: key.Device, Capability: capability, Args: args})
 	if err != nil {
 		return effect.Effect{}, err
 	}
@@ -180,6 +320,32 @@ func (r *Runtime) Invoke(ctx context.Context, key DeviceKey, capability string, 
 		}
 	}
 	return eff, nil
+}
+
+// logInvoke writes the AL-8 line: via, aid, full id and outcome. Values that
+// came off the wire are quoted, so a newline in an id cannot forge a line.
+// The arguments are never logged.
+func (r *Runtime) logInvoke(c Caller, id string, eff effect.Effect, err error) {
+	result := string(eff.Status)
+	switch {
+	case errors.Is(err, ErrNotPermitted):
+		result = "not_permitted"
+	case errors.Is(err, ErrUnknownCapability):
+		result = "unknown_capability"
+	case err != nil:
+		result = "error"
+	}
+	logf := r.cfg.Logf
+	if logf == nil {
+		logf = log.Printf
+	}
+	via := string(c.Via)
+	switch c.Via {
+	case ViaLocal, ViaLocalMCP, ViaRelay:
+	default:
+		via = strconv.Quote(via)
+	}
+	logf("invoke via=%s aid=%q cap=%q result=%s", via, c.AID, id, result)
 }
 
 // sink receives adapter reports.

@@ -61,9 +61,14 @@ func New(rt *runtime.Runtime, version string) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "devices_list",
 		Description: "List all devices ANetLink currently exposes: key, protocol, online state, trust level (0-4) and callable capabilities.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolp(false)},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listOut, error) {
 		var out listOut
-		for _, d := range rt.Devices() {
+		for _, e := range rt.Inventory() {
+			d := e.Device
+			if d.Profile == nil {
+				continue
+			}
 			all := d.Profile.AllCaps() // includes endpoint capabilities (D50)
 			caps := make([]string, 0, len(all))
 			for _, c := range all {
@@ -71,7 +76,9 @@ func New(rt *runtime.Runtime, version string) *mcp.Server {
 			}
 			cid, _ := d.Profile.CID()
 			out.Devices = append(out.Devices, DeviceView{
-				Key:          d.Profile.Protocol + "/" + d.ID,
+				// The key device_invoke resolves: the adapter's name, which
+				// is not always the profile's protocol.
+				Key:          e.Key.String(),
 				Protocol:     d.Profile.Protocol,
 				Online:       d.Online,
 				Trust:        uint8(d.Profile.MaxTrust),
@@ -86,12 +93,14 @@ func New(rt *runtime.Runtime, version string) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "device_invoke",
 		Description: "Invoke one capability on one device. Returns the execution effect: status is honest — UNVERIFIED means the command went out but the physical effect cannot be verified at this device's trust level; it is not a failure.",
+		// It acts on the physical world: a lamp, a lock, a valve.
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolp(true), OpenWorldHint: boolp(true)},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in invokeIn) (*mcp.CallToolResult, invokeOut, error) {
 		key, err := parseKey(in.Device)
 		if err != nil {
 			return nil, invokeOut{}, err
 		}
-		eff, err := rt.Invoke(ctx, key, in.Capability, in.Args)
+		eff, err := rt.Invoke(ctx, runtime.Caller{Via: runtime.ViaLocalMCP}, key, in.Capability, in.Args)
 		if err != nil {
 			return nil, invokeOut{}, err
 		}
@@ -112,6 +121,7 @@ func New(rt *runtime.Runtime, version string) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "devices_discover",
 		Description: "Scan the connected networks (Zigbee, BACnet, …) for devices that are present but not yet configured. Returns each find with a suggested id, its capabilities and a ready-to-paste config fragment — the fast path from 'I have a device' to 'the agent can call it'.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolp(true)},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, discoverOut, error) {
 		found, errs := rt.DiscoverAll(ctx)
 		out := discoverOut{}
@@ -130,6 +140,8 @@ func New(rt *runtime.Runtime, version string) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "devices_pair",
 		Description: "Open the networks that support pairing (Zigbee permit-join, ...) for a window of seconds so new devices can join, then report what joined with its capabilities. Use this when the user says they bought or reset a device. Default window 60s, max 254s (a Zigbee limit).",
+		// Opening a network to joiners changes who is on it.
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolp(true), OpenWorldHint: boolp(true)},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in pairIn) (*mcp.CallToolResult, discoverOut, error) {
 		secs := in.WindowSeconds
 		if secs <= 0 {
@@ -174,6 +186,8 @@ type discoverOut struct {
 	Found    []foundView `json:"found"`
 	Problems []string    `json:"problems,omitempty" jsonschema:"adapters that could not scan, and why"`
 }
+
+func boolp(b bool) *bool { return &b }
 
 func parseKey(s string) (runtime.DeviceKey, error) {
 	for i := 0; i < len(s); i++ {

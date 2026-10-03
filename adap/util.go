@@ -3,9 +3,6 @@ package adap
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
-	"net"
-	"syscall"
 )
 
 // newRID mints a request-correlation id. Random rather than a counter: a
@@ -17,29 +14,6 @@ func newRID() string {
 		return "rid-fallback"
 	}
 	return hex.EncodeToString(b[:])
-}
-
-// peerUID reads the connecting process's uid via SO_PEERCRED (spec §6).
-func peerUID(c net.Conn) (uint32, error) {
-	uc, ok := c.(*net.UnixConn)
-	if !ok {
-		return 0, fmt.Errorf("adap: not a unix socket")
-	}
-	raw, err := uc.SyscallConn()
-	if err != nil {
-		return 0, err
-	}
-	var cred *syscall.Ucred
-	var cerr error
-	if err := raw.Control(func(fd uintptr) {
-		cred, cerr = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
-	}); err != nil {
-		return 0, err
-	}
-	if cerr != nil {
-		return 0, cerr
-	}
-	return cred.Uid, nil
 }
 
 // floatMap coerces a decoded CBOR map into metrics.

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/ANetResearch/ANetLink/northbound/c1serv"
 	"github.com/ANetResearch/ANetLink/quirk"
 	"github.com/ANetResearch/ANetLink/runtime"
 )
@@ -18,6 +21,12 @@ import (
 //	    "modbus":        { ...modbus.Config... },
 //	    "mqtt":          { ...mqttbridge.Config... },
 //	    "homeassistant": { ...habridge.Config... }
+//	  },
+//	  "c1": {
+//	    "socket":      "/run/anetlink/c1.sock",
+//	    "allow_users": ["anet"],
+//	    "group":       "anet",
+//	    "remote":      ["light.onoff@sim/*"]
 //	  }
 //	}
 //
@@ -34,6 +43,54 @@ type fileConfig struct {
 	// NoDefaultQuirks disables the corrections shipped with the build, for
 	// an operator who would rather curate the whole set themselves.
 	NoDefaultQuirks bool `json:"no_default_quirks,omitempty"`
+	// C1 is the daemon-facing socket (ux §2.4). Decoded strictly: a
+	// misspelt key here would quietly leave access other than intended.
+	C1Raw json.RawMessage `json:"c1,omitempty"`
+
+	c1 c1Section
+}
+
+// c1Section is the "c1" block. Every default is the closed one: the
+// default socket path, only anetlinkd's own user, no remote access.
+type c1Section struct {
+	// Socket defaults to $XDG_RUNTIME_DIR/anetlink/c1.sock.
+	Socket string `json:"socket,omitempty"`
+	// AllowUsers are other users (names or uids) that may connect,
+	// typically the user the anet daemon runs as.
+	AllowUsers []string `json:"allow_users,omitempty"`
+	// Group opens the socket to AllowUsers; see c1serv.Options.
+	Group string `json:"group,omitempty"`
+	// Remote lists path.Match patterns over "<capability>@<adapter>/<device>"
+	// that remote agents may invoke through the daemon. Empty: none.
+	Remote []string `json:"remote,omitempty"`
+}
+
+// c1Flags are the command-line equivalents; a flag that is set wins.
+type c1Flags struct {
+	socket     string
+	allowUsers stringList
+	group      string
+}
+
+// stringList is a repeatable string flag.
+type stringList []string
+
+func (l *stringList) String() string     { return strings.Join(*l, ",") }
+func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
+
+// c1Options merges the c1 block with the command line.
+func (c *fileConfig) c1Options(f c1Flags) c1serv.Options {
+	o := c1serv.Options{Socket: c.c1.Socket, AllowUsers: c.c1.AllowUsers, Group: c.c1.Group}
+	if f.socket != "" {
+		o.Socket = f.socket
+	}
+	if len(f.allowUsers) > 0 {
+		o.AllowUsers = f.allowUsers
+	}
+	if f.group != "" {
+		o.Group = f.group
+	}
+	return o
 }
 
 func loadConfig(path string) (*fileConfig, error) {
@@ -47,6 +104,13 @@ func loadConfig(path string) (*fileConfig, error) {
 	var c fileConfig
 	if err := json.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("config %s: %w", path, err)
+	}
+	if len(c.C1Raw) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(c.C1Raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&c.c1); err != nil {
+			return nil, fmt.Errorf("config %s: c1: %w (known keys: socket, allow_users, group, remote)", path, err)
+		}
 	}
 	return &c, nil
 }
@@ -66,7 +130,10 @@ func (c *fileConfig) runtimeConfig() (runtime.Config, error) {
 			return runtime.Config{}, fmt.Errorf("quirk_dir %s: %w", c.QuirkDir, err)
 		}
 	}
-	return runtime.Config{BackendOverride: c.BackendOverride, Quirks: reg}, nil
+	if err := runtime.ValidateRemote(c.c1.Remote); err != nil {
+		return runtime.Config{}, err
+	}
+	return runtime.Config{BackendOverride: c.BackendOverride, Quirks: reg, Remote: c.c1.Remote}, nil
 }
 
 // buildAdapters instantiates every compiled-in plugin that is configured

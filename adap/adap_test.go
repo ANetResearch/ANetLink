@@ -50,7 +50,9 @@ func (s *memSink) count() int {
 // rig starts a host and connects a plugin to it over a real socket.
 func rig(t *testing.T, p *Plugin) (*Host, *memSink) {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "adap.sock")
+	// A subdirectory the host creates 0700: t.TempDir() itself follows the
+	// umask, and a group-writable directory is refused (AL-10).
+	sock := filepath.Join(t.TempDir(), "run", "adap.sock")
 	h := NewHost(HostConfig{Name: "test", Socket: sock, Timeout: 3 * time.Second})
 	sink := newSink()
 

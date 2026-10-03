@@ -5,6 +5,7 @@ go 1.26.6
 require (
 	github.com/ANetResearch/ANetCore v0.4.2
 	github.com/eclipse/paho.mqtt.golang v1.5.1
+	github.com/fxamacker/cbor/v2 v2.9.2
 	github.com/gopcua/opcua v0.9.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/grid-x/modbus v0.0.0-20260701064235-82e41c9acfb6
@@ -15,12 +16,12 @@ require (
 	go.einride.tech/can v0.17.0
 	golang.org/x/crypto v0.55.0
 	golang.org/x/net v0.58.0
+	golang.org/x/sys v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
-	github.com/fxamacker/cbor/v2 v2.9.2 // indirect
 	github.com/goburrow/modbus v0.1.0 // indirect
 	github.com/goburrow/serial v0.1.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
@@ -43,7 +44,6 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	lukechampine.com/blake3 v1.1.6 // indirect
 )
