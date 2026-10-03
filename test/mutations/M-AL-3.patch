@@ -1,0 +1,16 @@
+# M-AL-3: the request body is no longer bounded
+# pkg: ./northbound/c1serv
+# run: TestRequestBodyLimit
+diff --git a/northbound/c1serv/c1serv.go b/northbound/c1serv/c1serv.go
+index 03d8698..07e895f 100644
+--- a/northbound/c1serv/c1serv.go
++++ b/northbound/c1serv/c1serv.go
+@@ -332,7 +332,7 @@ func (s *server) invoke(w http.ResponseWriter, r *http.Request) {
+ 		s.refuse(w, "unsupported_media", "invoke with Content-Type %q; C1 v1 speaks only %s", r.Header.Get("Content-Type"), contentCBOR)
+ 		return
+ 	}
+-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
++	body, err := io.ReadAll(r.Body)
+ 	if err != nil {
+ 		var tooBig *http.MaxBytesError
+ 		if errors.As(err, &tooBig) {

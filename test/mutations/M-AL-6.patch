@@ -1,0 +1,32 @@
+# M-AL-6: the remote policy lives only in c1serv, not in runtime.Invoke
+# pkg: ./runtime ./northbound/c1serv
+# run: TestRemoteCallersAreRefusedByDefault|TestPolicyIsTheSameThroughEveryEntrance
+diff --git a/northbound/c1serv/c1serv.go b/northbound/c1serv/c1serv.go
+index 03d8698..7df5957 100644
+--- a/northbound/c1serv/c1serv.go
++++ b/northbound/c1serv/c1serv.go
+@@ -352,6 +352,10 @@ func (s *server) invoke(w http.ResponseWriter, r *http.Request) {
+ 		s.refuse(w, "unknown_capability", "invoke: %v", err)
+ 		return
+ 	}
++	if who.Via == runtime.ViaRelay && !s.rt.RemoteAllowed(runtime.CapabilityID(capID, key)) {
++		s.refuse(w, "not_permitted", "invoke %q: not open to remote callers", *req.Capability)
++		return
++	}
+ 	eff, err := s.rt.Invoke(r.Context(), who, key, capID, jsonShapedArgs(req.Args))
+ 	switch {
+ 	case errors.Is(err, runtime.ErrNotPermitted):
+diff --git a/runtime/runtime.go b/runtime/runtime.go
+index ffcc1ab..24358be 100644
+--- a/runtime/runtime.go
++++ b/runtime/runtime.go
+@@ -287,9 +287,6 @@ func (r *Runtime) permit(c Caller, id string) error {
+ func (r *Runtime) Invoke(ctx context.Context, caller Caller, key DeviceKey, capability string, args map[string]any) (eff effect.Effect, err error) {
+ 	id := CapabilityID(capability, key)
+ 	defer func() { r.logInvoke(caller, id, eff, err) }()
+-	if err := r.permit(caller, id); err != nil {
+-		return effect.Effect{}, err
+-	}
+ 	r.mu.RLock()
+ 	e, ok := r.devices[key]
+ 	r.mu.RUnlock()

@@ -37,14 +37,14 @@ func TestStartSelectsBackendAndDiscovers(t *testing.T) {
 func TestInvokeRoundTrip(t *testing.T) {
 	rt := startedRuntime(t)
 	key := DeviceKey{"sim", sim.DeviceID}
-	eff, err := rt.Invoke(context.Background(), key, "light.onoff", map[string]any{"on": true})
+	eff, err := rt.Invoke(context.Background(), local, key, "light.onoff", map[string]any{"on": true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !eff.Verifiable() || eff.Record.Metrics["power_state"] != 1 {
 		t.Fatalf("expected verifiable on-state, got %+v", eff)
 	}
-	eff, _ = rt.Invoke(context.Background(), key, "light.onoff", map[string]any{"on": false})
+	eff, _ = rt.Invoke(context.Background(), local, key, "light.onoff", map[string]any{"on": false})
 	if eff.Record.Metrics["power_state"] != 0 {
 		t.Fatalf("lamp did not turn off: %+v", eff)
 	}
@@ -52,7 +52,7 @@ func TestInvokeRoundTrip(t *testing.T) {
 
 func TestInvokeRejectsUndeclaredCapability(t *testing.T) {
 	rt := startedRuntime(t)
-	_, err := rt.Invoke(context.Background(), DeviceKey{"sim", sim.DeviceID}, "thermostat.set", nil)
+	_, err := rt.Invoke(context.Background(), local, DeviceKey{"sim", sim.DeviceID}, "thermostat.set", nil)
 	if err == nil || !strings.Contains(err.Error(), "does not declare") {
 		t.Fatalf("undeclared capability must be rejected pre-adapter, got %v", err)
 	}
@@ -83,7 +83,7 @@ func TestTrustClampDowngradesOK(t *testing.T) {
 	if err := rt.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	eff, err := rt.Invoke(context.Background(), DeviceKey{"cloudsim", sim.DeviceID}, "light.onoff", map[string]any{"on": true})
+	eff, err := rt.Invoke(context.Background(), local, DeviceKey{"cloudsim", sim.DeviceID}, "light.onoff", map[string]any{"on": true})
 	if err != nil {
 		t.Fatal(err)
 	}

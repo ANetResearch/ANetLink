@@ -21,18 +21,21 @@ import (
 // Config:
 //
 //	{"adap": {"sockets": [
-//	   {"name": "matter", "socket": "/run/anetlink/matter.sock", "allow_uid": 1000}
+//	   {"name": "matter", "socket": "/run/anetlink/adap/matter.sock"}
 //	]}}
+//
+// The adapter process runs as anetlinkd's own user; no other user may
+// connect (AL-10), so there is no allow_uid any more.
 func init() {
 	registerPlugin(adapterPlugin{
 		name: "adap",
 		fromJSON: func(b json.RawMessage) (sdk.Adapter, error) {
 			var cfg struct {
 				Sockets []struct {
-					Name     string  `json:"name"`
-					Socket   string  `json:"socket"`
-					AllowUID *uint32 `json:"allow_uid"`
-					TimeoutS int     `json:"timeout_s"`
+					Name     string          `json:"name"`
+					Socket   string          `json:"socket"`
+					AllowUID json.RawMessage `json:"allow_uid"`
+					TimeoutS int             `json:"timeout_s"`
 				} `json:"sockets"`
 			}
 			if len(b) > 0 {
@@ -56,7 +59,11 @@ func init() {
 			if s.Socket == "" {
 				return nil, fmt.Errorf("adap: socket path is required")
 			}
-			hc := adap.HostConfig{Name: s.Name, Socket: s.Socket, AllowUID: s.AllowUID}
+			if s.AllowUID != nil {
+				return nil, fmt.Errorf("adap: allow_uid was removed in 0.2.0, because only anetlinkd's own user " +
+					"may connect; run the adapter process as that user and delete allow_uid")
+			}
+			hc := adap.HostConfig{Name: s.Name, Socket: s.Socket}
 			if s.TimeoutS > 0 {
 				hc.Timeout = time.Duration(s.TimeoutS) * time.Second
 			}

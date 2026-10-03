@@ -86,6 +86,20 @@ jobs:
       - name: boot without ${{ matrix.tags }}
         run: go run -tags "${{ matrix.tags }}" ./cmd/anetlinkd --demo
 
+  # Every M-AL mutation (LEC §7.3) must turn the tests it names red; one
+  # that survives means a security rule lost its test.
+  mutations:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: each mutation is caught
+        run: ./test/mutations/run.sh
+
   race:
     runs-on: ubuntu-latest
     steps:

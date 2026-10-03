@@ -1,0 +1,16 @@
+# M-AL-2-dir: the socket directory is no longer checked
+# pkg: ./northbound/c1serv ./internal/peercred
+# run: TestListenRefusesAnUntrustedDirectory|TestPrepareDirRefusesWritableByOthers
+diff --git a/internal/peercred/sockdir.go b/internal/peercred/sockdir.go
+index 45b12f2..8dc53d6 100644
+--- a/internal/peercred/sockdir.go
++++ b/internal/peercred/sockdir.go
+@@ -44,7 +44,7 @@ func PrepareDir(dir string) (created bool, err error) {
+ 	if !ok {
+ 		return false, fmt.Errorf("cannot read the owner of %s", dir)
+ 	}
+-	if err := checkDirTrust(dir, uid, fi.Mode(), os.Getuid()); err != nil {
++	if err := checkDirTrust(dir, uid, fi.Mode(), os.Getuid()); false && err != nil {
+ 		return false, err
+ 	}
+ 	return created, nil

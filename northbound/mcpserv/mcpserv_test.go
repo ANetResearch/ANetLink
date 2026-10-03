@@ -89,3 +89,53 @@ func TestInvokeBadKey(t *testing.T) {
 		t.Fatal("malformed device key must surface as tool error")
 	}
 }
+
+// AL-9: the hints an MCP client uses to decide what needs a human's
+// confirmation. Actuating and pairing change the physical world and reach
+// beyond this process; discovery and listing change nothing.
+func TestToolAnnotations(t *testing.T) {
+	cs := session(t)
+	res, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type hints struct{ readOnly, destructive, openWorld bool }
+	want := map[string]hints{
+		"device_invoke":    {readOnly: false, destructive: true, openWorld: true},
+		"devices_pair":     {readOnly: false, destructive: true, openWorld: true},
+		"devices_discover": {readOnly: true, destructive: false, openWorld: true},
+		"devices_list":     {readOnly: true, destructive: false, openWorld: false},
+	}
+	seen := 0
+	for _, tool := range res.Tools {
+		w, ok := want[tool.Name]
+		if !ok {
+			continue
+		}
+		seen++
+		a := tool.Annotations
+		if a == nil {
+			t.Errorf("%s has no annotations", tool.Name)
+			continue
+		}
+		// DestructiveHint and OpenWorldHint default to true when absent, so
+		// "false" must be written out and "true" may be either.
+		destructive := a.DestructiveHint == nil || *a.DestructiveHint
+		openWorld := a.OpenWorldHint == nil || *a.OpenWorldHint
+		if a.ReadOnlyHint != w.readOnly {
+			t.Errorf("%s readOnlyHint = %v, want %v", tool.Name, a.ReadOnlyHint, w.readOnly)
+		}
+		if !a.ReadOnlyHint && destructive != w.destructive {
+			t.Errorf("%s destructiveHint = %v, want %v", tool.Name, destructive, w.destructive)
+		}
+		if openWorld != w.openWorld {
+			t.Errorf("%s openWorldHint = %v, want %v", tool.Name, openWorld, w.openWorld)
+		}
+		if w.destructive && (a.DestructiveHint == nil || a.OpenWorldHint == nil) {
+			t.Errorf("%s: spell the destructive and open-world hints out rather than rely on defaults", tool.Name)
+		}
+	}
+	if seen != len(want) {
+		t.Fatalf("saw %d of %d tools", seen, len(want))
+	}
+}

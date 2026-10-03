@@ -8,15 +8,21 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"sync"
 	"time"
 
 	"github.com/ANetResearch/ANetCore/effect"
 	"github.com/ANetResearch/ANetCore/tsir"
 
+	"github.com/ANetResearch/ANetLink/internal/peercred"
 	"github.com/ANetResearch/ANetLink/profile"
 	"github.com/ANetResearch/ANetLink/sdk"
 )
+
+// peerCredOf is peercred.Of; a variable only so a test can stand in for a
+// connection from another user.
+var peerCredOf = peercred.Of
 
 // Host runs one out-of-tree adapter process and presents it to the runtime
 // as an ordinary sdk.Adapter.
@@ -45,14 +51,13 @@ type Host struct {
 type HostConfig struct {
 	// Name is the adapter name the runtime knows it by.
 	Name string
-	// Socket is the UDS path. Created 0600 (spec §6) — the socket is the
-	// authorisation boundary, so it is not group- or world-reachable.
+	// Socket is the UDS path. Created 0600 in a directory nobody else can
+	// write (spec §6) — the socket is the authorisation boundary. Only
+	// anetlinkd's own user may connect: the adapter process runs as that
+	// user, and the kernel's word on the peer is checked at every accept.
 	Socket string
 	// Timeout bounds one request/response exchange.
 	Timeout time.Duration
-	// AllowUID, when non-nil, restricts which peer uid may connect. The
-	// spec asks for SO_PEERCRED; this is where that check lands.
-	AllowUID *uint32
 }
 
 // NewHost prepares a host. Nothing is created until Start.
@@ -87,10 +92,12 @@ func (b socketBackend) Probe(ctx context.Context) sdk.Availability {
 	// but the ability to own the socket path. Reporting available here and
 	// failing in Start would be the wrong shape: a path we cannot bind is a
 	// configuration error an operator can fix, and it should say so now.
-	dir := filepath.Dir(b.h.cfg.Socket)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if !peercred.Supported() {
 		return sdk.Availability{Available: false,
-			Detail: fmt.Sprintf("cannot create %s: %v", dir, err)}
+			Detail: fmt.Sprintf("%s cannot report who connects to a Unix socket; out-of-tree adapters need Linux, macOS or FreeBSD", goruntime.GOOS)}
+	}
+	if _, err := peercred.PrepareDir(filepath.Dir(b.h.cfg.Socket)); err != nil {
+		return sdk.Availability{Available: false, Detail: err.Error()}
 	}
 	return sdk.Availability{Available: true,
 		Detail: fmt.Sprintf("out-of-tree adapter over ADAP v%d at %s", Version, b.h.cfg.Socket)}
@@ -100,9 +107,22 @@ func (h *Host) Backends() []sdk.Backend { return []sdk.Backend{socketBackend{h}}
 
 // Start binds the socket and waits for the adapter to say hello.
 func (h *Host) Start(ctx context.Context, _ sdk.Backend, sink sdk.Sink) error {
-	// A stale socket from a crashed run would make bind fail; removing it is
-	// safe because the 0600 mode means only we could have created it.
-	_ = os.Remove(h.cfg.Socket)
+	// The directory is checked again here, not only in Probe: Start is the
+	// moment that matters. Then only a stale socket (nobody listening) is
+	// removed — a path that is a live socket, a symlink or anything else
+	// belongs to someone, and is refused rather than taken over.
+	if !peercred.Supported() {
+		return fmt.Errorf("adap: %s cannot report who connects to a Unix socket; out-of-tree adapters need Linux, macOS or FreeBSD", goruntime.GOOS)
+	}
+	if err := peercred.CheckPathLen(h.cfg.Socket); err != nil {
+		return fmt.Errorf("adap: %w", err)
+	}
+	if _, err := peercred.PrepareDir(filepath.Dir(h.cfg.Socket)); err != nil {
+		return fmt.Errorf("adap: %w", err)
+	}
+	if err := peercred.ClearPath(h.cfg.Socket); err != nil {
+		return fmt.Errorf("adap: %w", err)
+	}
 	ln, err := net.Listen("unix", h.cfg.Socket)
 	if err != nil {
 		return fmt.Errorf("adap: listen %s: %w", h.cfg.Socket, err)
@@ -158,19 +178,18 @@ func (h *Host) accept(ln net.Listener) {
 	}
 }
 
-// permitted enforces the peer-credential check (spec §6).
+// permitted enforces the peer-credential check (spec §6, AL-10): the
+// adapter process must run as anetlinkd's own user. Nothing is read from
+// a connection that fails it.
 func (h *Host) permitted(c net.Conn) bool {
-	if h.cfg.AllowUID == nil {
-		return true
-	}
-	uid, err := peerUID(c)
+	cred, err := peerCredOf(c)
 	if err != nil {
-		log.Printf("adap %s: cannot read peer credentials: %v", h.cfg.Name, err)
+		log.Printf("adap %s: closed a connection whose peer could not be identified: %v", h.cfg.Name, err)
 		return false
 	}
-	if uid != *h.cfg.AllowUID {
-		log.Printf("adap %s: refusing connection from uid %d (allowed: %d)",
-			h.cfg.Name, uid, *h.cfg.AllowUID)
+	if self := os.Getuid(); cred.UID != self {
+		log.Printf("adap %s: refused uid %d on %s; the adapter process must run as anetlinkd's own user (uid %d)",
+			h.cfg.Name, cred.UID, h.cfg.Socket, self)
 		return false
 	}
 	return true
@@ -456,9 +475,10 @@ func (h *Host) Stop(context.Context) error {
 		conn.Close()
 	}
 	if ln != nil {
+		// Closing the listener unlinks the socket it created; nothing else
+		// at the path is ours to remove.
 		ln.Close()
 	}
-	_ = os.Remove(h.cfg.Socket)
 	return nil
 }
 
