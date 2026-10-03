@@ -1,0 +1,26 @@
+# M-AL-5: the decoder accepts InvokeReq key 4 and Caller key 3
+# pkg: ./northbound/c1serv
+# run: TestC1GoldenNegative
+diff --git a/northbound/c1serv/c1serv.go b/northbound/c1serv/c1serv.go
+index 03d8698..ce36079 100644
+--- a/northbound/c1serv/c1serv.go
++++ b/northbound/c1serv/c1serv.go
+@@ -119,14 +119,16 @@ type invokeReq struct {
+ 	Capability *string        `cbor:"1,keyasint,omitempty"`
+ 	Args       map[string]any `cbor:"2,keyasint,omitempty"`
+ 	CallID     *string        `cbor:"3,keyasint,omitempty"`
++	CallerAID  *string        `cbor:"4,keyasint,omitempty"`
+ 	Caller     *caller        `cbor:"5,keyasint,omitempty"`
+ }
+ 
+ // caller has no field for key 3 (reserved; it was witnessed), for the same
+ // reason.
+ type caller struct {
+-	Via *uint64 `cbor:"1,keyasint,omitempty"`
+-	AID *string `cbor:"2,keyasint,omitempty"`
++	Via       *uint64 `cbor:"1,keyasint,omitempty"`
++	AID       *string `cbor:"2,keyasint,omitempty"`
++	Witnessed *bool   `cbor:"3,keyasint,omitempty"`
+ }
+ 
+ type invokeResp struct {

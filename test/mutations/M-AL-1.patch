@@ -1,0 +1,16 @@
+# M-AL-1: accept no longer checks the peer uid
+# pkg: ./northbound/c1serv
+# run: TestPeerCheckClosesOtherUIDs
+diff --git a/northbound/c1serv/listen.go b/northbound/c1serv/listen.go
+index 8f4b9b4..7a02ffe 100644
+--- a/northbound/c1serv/listen.go
++++ b/northbound/c1serv/listen.go
+@@ -256,7 +256,7 @@ func (l *peerListener) Accept() (net.Conn, error) {
+ 			}
+ 			continue
+ 		}
+-		if !l.allowed[cred.UID] {
++		if false && !l.allowed[cred.UID] {
+ 			c.Close()
+ 			if l.once(cred.UID) {
+ 				l.logf("c1_uid_refused: %s", uidRefusedSentence(cred.UID))

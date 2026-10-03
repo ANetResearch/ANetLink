@@ -1,0 +1,16 @@
+# M-AL-8-utf8: the invoke message is no longer made valid UTF-8
+# pkg: ./northbound/c1serv
+# run: TestInvalidUTF8MessageIsCleaned
+diff --git a/northbound/c1serv/c1serv.go b/northbound/c1serv/c1serv.go
+index 03d8698..ac41a40 100644
+--- a/northbound/c1serv/c1serv.go
++++ b/northbound/c1serv/c1serv.go
+@@ -364,7 +364,7 @@ func (s *server) invoke(w http.ResponseWriter, r *http.Request) {
+ 		s.refuse(w, "internal", "invoke %s: %v", *req.Capability, err)
+ 		return
+ 	}
+-	resp := invokeResp{Status: clean(string(eff.Status)), Message: clean(eff.Message)}
++	resp := invokeResp{Status: clean(string(eff.Status)), Message: eff.Message}
+ 	if eff.Record != nil && len(eff.Record.Metrics) > 0 {
+ 		resp.Metrics = make(map[string]float64, len(eff.Record.Metrics))
+ 		for k, v := range eff.Record.Metrics {

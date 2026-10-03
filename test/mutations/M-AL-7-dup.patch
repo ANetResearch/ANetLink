@@ -1,0 +1,15 @@
+# M-AL-7-dup: c1DecMode no longer refuses duplicate keys
+# pkg: ./northbound/c1serv
+# run: TestC1DecModeOptions|TestC1GoldenNegative
+diff --git a/northbound/c1serv/c1serv.go b/northbound/c1serv/c1serv.go
+index 03d8698..5018d60 100644
+--- a/northbound/c1serv/c1serv.go
++++ b/northbound/c1serv/c1serv.go
+@@ -75,7 +75,6 @@ var c1DecMode cbor.DecMode
+ func init() {
+ 	dm, err := cbor.DecOptions{
+ 		TagsMd:            cbor.TagsForbidden,
+-		DupMapKey:         cbor.DupMapKeyEnforcedAPF,
+ 		ExtraReturnErrors: cbor.ExtraDecErrorUnknownField,
+ 	}.DecMode()
+ 	if err != nil {

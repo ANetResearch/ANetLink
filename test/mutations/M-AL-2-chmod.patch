@@ -1,0 +1,16 @@
+# M-AL-2-chmod: the socket mode is no longer set
+# pkg: ./northbound/c1serv
+# run: TestSocketIsPrivateByDefault|TestSocketOpensToOneOtherUserThroughAGroup
+diff --git a/northbound/c1serv/listen.go b/northbound/c1serv/listen.go
+index 8f4b9b4..6c9570e 100644
+--- a/northbound/c1serv/listen.go
++++ b/northbound/c1serv/listen.go
+@@ -191,7 +191,7 @@ func Listen(o Options) (net.Listener, error) {
+ 		return nil, err
+ 	}
+ 	// Mode first, then group: the socket is never more open than intended.
+-	if err := os.Chmod(o.Socket, ac.mode); err != nil {
++	if err := error(nil); err != nil {
+ 		return fail(fmt.Errorf("c1: cannot set mode %04o on %s: %w", ac.mode, o.Socket, err))
+ 	}
+ 	if ac.gid >= 0 {

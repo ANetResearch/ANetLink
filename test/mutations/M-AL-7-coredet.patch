@@ -1,0 +1,16 @@
+# M-AL-7-coredet: c1serv decodes requests with coredet.Unmarshal again
+# pkg: ./northbound/c1serv
+# run: TestC1ServDecodesOnlyWithC1DecMode|TestC1GoldenNegative
+diff --git a/northbound/c1serv/c1serv.go b/northbound/c1serv/c1serv.go
+index 03d8698..9f94dfa 100644
+--- a/northbound/c1serv/c1serv.go
++++ b/northbound/c1serv/c1serv.go
+@@ -210,7 +210,7 @@ func ParseCapabilityID(s string) (capID string, key runtime.DeviceKey, err error
+ // returns the request with the caller it names.
+ func decodeInvokeReq(b []byte) (invokeReq, runtime.Caller, error) {
+ 	var req invokeReq
+-	if err := c1DecMode.Unmarshal(b, &req); err != nil {
++	if err := coredet.Unmarshal(b, &req); err != nil {
+ 		return invokeReq{}, runtime.Caller{}, err
+ 	}
+ 	if req.Capability == nil {

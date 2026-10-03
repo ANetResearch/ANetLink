@@ -1,0 +1,19 @@
+# M-AL-7-unknown: c1DecMode no longer refuses unknown keys
+# pkg: ./northbound/c1serv
+# run: TestC1DecModeOptions|TestC1GoldenNegative
+diff --git a/northbound/c1serv/c1serv.go b/northbound/c1serv/c1serv.go
+index 03d8698..b924018 100644
+--- a/northbound/c1serv/c1serv.go
++++ b/northbound/c1serv/c1serv.go
+@@ -74,9 +74,8 @@ var c1DecMode cbor.DecMode
+ 
+ func init() {
+ 	dm, err := cbor.DecOptions{
+-		TagsMd:            cbor.TagsForbidden,
+-		DupMapKey:         cbor.DupMapKeyEnforcedAPF,
+-		ExtraReturnErrors: cbor.ExtraDecErrorUnknownField,
++		TagsMd:    cbor.TagsForbidden,
++		DupMapKey: cbor.DupMapKeyEnforcedAPF,
+ 	}.DecMode()
+ 	if err != nil {
+ 		panic(fmt.Sprintf("c1serv: decode options: %v", err))

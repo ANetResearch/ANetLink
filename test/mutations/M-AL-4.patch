@@ -1,0 +1,17 @@
+# M-AL-4: c1.remote defaults to everything
+# pkg: ./runtime ./northbound/c1serv
+# run: TestRemoteCallersAreRefusedByDefault|TestCapabilitiesReportRemote|TestPolicyIsTheSameThroughEveryEntrance
+diff --git a/runtime/runtime.go b/runtime/runtime.go
+index ffcc1ab..26f1114 100644
+--- a/runtime/runtime.go
++++ b/runtime/runtime.go
+@@ -246,6 +246,9 @@ func (r *Runtime) Inventory() []Entry {
+ // RemoteAllowed reports whether a remote caller may invoke the capability
+ // with this full id: whether it matches a Config.Remote pattern.
+ func (r *Runtime) RemoteAllowed(id string) bool {
++	if len(r.cfg.Remote) == 0 {
++		return true
++	}
+ 	for _, p := range r.cfg.Remote {
+ 		if ok, err := path.Match(p, id); err == nil && ok {
+ 			return true

@@ -1,0 +1,16 @@
+# M-AL-8-reread: responses are no longer read back before sending
+# pkg: ./northbound/c1serv
+# run: TestResponsesAreReadBackBeforeSending
+diff --git a/northbound/c1serv/c1serv.go b/northbound/c1serv/c1serv.go
+index 03d8698..40d4d05 100644
+--- a/northbound/c1serv/c1serv.go
++++ b/northbound/c1serv/c1serv.go
+@@ -253,7 +253,7 @@ func encodeChecked[T any](v T) ([]byte, error) {
+ 		return nil, err
+ 	}
+ 	var back T
+-	if err := c1DecMode.Unmarshal(b, &back); err != nil {
++	if err := c1DecMode.Unmarshal(b, &back); false && err != nil {
+ 		return nil, fmt.Errorf("encoded response will not decode: %w", err)
+ 	}
+ 	return b, nil
