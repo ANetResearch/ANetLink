@@ -162,6 +162,9 @@ func Listen(o Options) (net.Listener, error) {
 	if o.Socket == "" {
 		return nil, errors.New("c1: no socket path; pass --c1-socket PATH or set c1.socket")
 	}
+	if err := peercred.CheckPathLen(o.Socket); err != nil {
+		return nil, fmt.Errorf("c1: %w (--c1-socket, c1.socket)", err)
+	}
 	ac, err := resolveAccess(o)
 	if err != nil {
 		return nil, err

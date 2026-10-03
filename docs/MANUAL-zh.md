@@ -672,6 +672,7 @@ source test/realworld/env
 | `--demo` 输出 no devices | sim 被 `no_sim` 裁掉或 config 关闭。这是预期的优雅退化 |
 | `c1: … is writable by other users` | C1 socket 所在目录可被他人写，谁都能换掉 socket。`chmod go-w <目录>` 或换一个目录 |
 | `c1: … is in use by another process` | 已有进程（多半是另一个 anetlinkd）在这个 socket 上。停掉它，或用 `--c1-socket` 换路径 |
+| `c1: the socket path … is N bytes, longer than the 107 this platform allows` | Unix socket 路径有长度上限（Linux 107 字节，macOS 与 BSD 103 字节）。换一个短路径，例如 `/run/anetlink/c1.sock` |
 | `c1: XDG_RUNTIME_DIR is not set` | 服务模式找不到缺省 socket 路径。加 `--c1-socket /run/anetlink/c1.sock`，daemon 侧 `modules.anetlink.socket` 设同一路径 |
 | `c1: the users in c1.allow_users cannot enter …` | 已存在的 socket 目录不让允许的用户进入。删掉该目录让 anetlinkd 重建，或按提示 `chgrp` 与 `chmod 0710` |
 | 日志 `c1_uid_refused` | 有用户连 c1.sock 但不在 `c1.allow_users` 中。确实需要时把该用户加入 `c1.allow_users` |

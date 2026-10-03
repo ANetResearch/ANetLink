@@ -97,6 +97,18 @@ func ClearPath(path string) error {
 	return nil
 }
 
+// CheckPathLen refuses a socket path the kernel cannot bind. sun_path
+// holds 108 bytes on Linux and 104 on the BSDs and macOS, including the
+// terminating NUL; past that, bind fails with a bare "invalid argument"
+// that names neither the cause nor the fix.
+func CheckPathLen(path string) error {
+	if len(path) > maxSocketPath {
+		return fmt.Errorf("the socket path %s is %d bytes, longer than the %d this platform allows; choose a shorter path",
+			path, len(path), maxSocketPath)
+	}
+	return nil
+}
+
 // OwnerOf returns the uid and gid that own fi.
 func OwnerOf(fi fs.FileInfo) (uid, gid int, ok bool) {
 	st, ok := fi.Sys().(*syscall.Stat_t)

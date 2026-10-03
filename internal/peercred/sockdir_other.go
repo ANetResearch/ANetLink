@@ -12,3 +12,6 @@ func ClearPath(string) error { return ErrUnsupported }
 
 // OwnerOf: see PrepareDir.
 func OwnerOf(fs.FileInfo) (int, int, bool) { return -1, -1, false }
+
+// CheckPathLen: see PrepareDir.
+func CheckPathLen(string) error { return ErrUnsupported }

@@ -97,6 +97,14 @@ func TestTwoOtherUsersNeedAGroup(t *testing.T) {
 		Group: strconv.Itoa(os.Getgid())})
 }
 
+func TestOverlongSocketPathIsRefusedWithTheFix(t *testing.T) {
+	long := filepath.Join(t.TempDir(), strings.Repeat("d", 120), "c1.sock")
+	_, err := Listen(Options{Socket: long, Logf: (&logSink{}).logf})
+	if err == nil || !strings.Contains(err.Error(), "shorter") {
+		t.Fatalf("over-long path: %v", err)
+	}
+}
+
 func TestUnknownUsersAndGroupsAreRefused(t *testing.T) {
 	for _, o := range []Options{
 		{AllowUsers: []string{"no-such-user-c1t"}},

@@ -171,3 +171,15 @@ func TestOwnerOf(t *testing.T) {
 		t.Fatalf("OwnerOf: uid=%d gid=%d ok=%v", uid, gid, ok)
 	}
 }
+
+func TestCheckPathLen(t *testing.T) {
+	if err := CheckPathLen("/run/anetlink/c1.sock"); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckPathLen(strings.Repeat("/x", maxSocketPath/2) + "/c1.sock"); err == nil || !strings.Contains(err.Error(), "shorter") {
+		t.Fatalf("an over-long path must be refused with the fix, got %v", err)
+	}
+	if err := CheckPathLen("/" + strings.Repeat("a", maxSocketPath-1)); err != nil {
+		t.Fatalf("exactly the limit must pass: %v", err)
+	}
+}

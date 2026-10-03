@@ -114,6 +114,9 @@ func (h *Host) Start(ctx context.Context, _ sdk.Backend, sink sdk.Sink) error {
 	if !peercred.Supported() {
 		return fmt.Errorf("adap: %s cannot report who connects to a Unix socket; out-of-tree adapters need Linux, macOS or FreeBSD", goruntime.GOOS)
 	}
+	if err := peercred.CheckPathLen(h.cfg.Socket); err != nil {
+		return fmt.Errorf("adap: %w", err)
+	}
 	if _, err := peercred.PrepareDir(filepath.Dir(h.cfg.Socket)); err != nil {
 		return fmt.Errorf("adap: %w", err)
 	}
