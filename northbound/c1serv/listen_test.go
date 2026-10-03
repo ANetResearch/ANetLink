@@ -68,7 +68,17 @@ func TestSocketIsPrivateByDefault(t *testing.T) {
 // after the socket mode is set.
 func TestSocketOpensToOneOtherUserThroughAGroup(t *testing.T) {
 	other := otherUser(t)
+	// A group the socket would not have anyway, when this user has one:
+	// with the primary group the chown would be a no-op and prove nothing.
 	gid := os.Getgid()
+	if gs, err := os.Getgroups(); err == nil {
+		for _, g := range gs {
+			if g != gid && g != 0 {
+				gid = g
+				break
+			}
+		}
+	}
 	sock := sockIn(t, "shared")
 	listenOK(t, Options{Socket: sock, AllowUsers: []string{other.Username}, Group: strconv.Itoa(gid)})
 	m, g := modeOf(t, sock)
@@ -78,6 +88,59 @@ func TestSocketOpensToOneOtherUserThroughAGroup(t *testing.T) {
 	dm, dg := modeOf(t, filepath.Dir(sock))
 	if dm.Perm() != 0o710 || dg != gid {
 		t.Fatalf("directory mode %v gid %d, want 0710 gid %d", dm.Perm(), dg, gid)
+	}
+}
+
+// The socket's own directory is settled by Listen; a directory further up
+// that keeps the allowed users out (the default $XDG_RUNTIME_DIR is 0700)
+// is named in a warning with the fix, instead of the daemon only ever
+// seeing "permission denied".
+func TestUnreachableParentDirectoryIsReported(t *testing.T) {
+	other := otherUser(t)
+	if other.Uid == "0" {
+		t.Skip("root passes every directory")
+	}
+	// Let others through everything the test framework made, then add one
+	// 0700 directory of our own, like $XDG_RUNTIME_DIR.
+	root := t.TempDir()
+	opened := []string{root, filepath.Dir(root)}
+	for _, d := range opened {
+		if err := os.Chmod(d, 0o711); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := filepath.Join(root, "xdg")
+	if err := os.Mkdir(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logs := &logSink{}
+	listenOK(t, Options{Socket: filepath.Join(base, "anetlink", "c1.sock"), AllowUsers: []string{other.Username},
+		Group: strconv.Itoa(os.Getgid()), Logf: logs.logf})
+	if logs.count("may not reach the socket, because "+base+" (mode 0700)") != 1 || logs.count("--c1-socket") != 1 {
+		t.Fatalf("a 0700 parent must be named with the fix:\n%s", logs.all())
+	}
+
+	// once the parents let others through, they are not named
+	if err := os.Chmod(base, 0o711); err != nil {
+		t.Fatal(err)
+	}
+	logs = &logSink{}
+	listenOK(t, Options{Socket: filepath.Join(base, "open", "c1.sock"), AllowUsers: []string{other.Username},
+		Group: strconv.Itoa(os.Getgid()), Logf: logs.logf})
+	for _, d := range append(opened, base) {
+		if logs.count("because "+d+" (") != 0 {
+			t.Fatalf("%s lets others through but was named:\n%s", d, logs.all())
+		}
+	}
+
+	// nobody else allowed: nothing to warn about
+	logs = &logSink{}
+	listenOK(t, Options{Socket: filepath.Join(t.TempDir(), "solo", "c1.sock"), Logf: logs.logf})
+	if logs.count("may not reach") != 0 {
+		t.Fatalf("warned without other users:\n%s", logs.all())
 	}
 }
 

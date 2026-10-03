@@ -675,6 +675,7 @@ source test/realworld/env
 | `c1: the socket path … is N bytes, longer than the 107 this platform allows` | Unix socket 路径有长度上限（Linux 107 字节，macOS 与 BSD 103 字节）。换一个短路径，例如 `/run/anetlink/c1.sock` |
 | `c1: XDG_RUNTIME_DIR is not set` | 服务模式找不到缺省 socket 路径。加 `--c1-socket /run/anetlink/c1.sock`，daemon 侧 `modules.anetlink.socket` 设同一路径 |
 | `c1: the users in c1.allow_users cannot enter …` | 已存在的 socket 目录不让允许的用户进入。删掉该目录让 anetlinkd 重建，或按提示 `chgrp` 与 `chmod 0710` |
+| 日志 `c1: the users in c1.allow_users may not reach the socket, because …` | socket 更上层的某个目录不让允许的用户通过（缺省的 `$XDG_RUNTIME_DIR` 按定义是 0700）。改用他们能到达的路径，例如 `--c1-socket /run/anetlink/c1.sock`，daemon 侧 `modules.anetlink.socket` 设同一路径 |
 | 日志 `c1_uid_refused` | 有用户连 c1.sock 但不在 `c1.allow_users` 中。确实需要时把该用户加入 `c1.allow_users` |
 | daemon 报 `c1_version` | anet 与 ANetLink 的 C1 版本不同。把两者升级到同一发布（ANetLink 0.2.0 起为 C1 v1） |
 | 远端调用方得到 `provider_policy` | 该能力不匹配 `c1.remote`。在 `c1.remote` 放行它，或在 anet 里不公开它 |

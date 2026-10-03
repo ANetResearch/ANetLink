@@ -213,7 +213,63 @@ func Listen(o Options) (net.Listener, error) {
 			}
 		}
 	}
+	if msg := reachWarning(dir, ac); msg != "" {
+		logf("%s", msg)
+	}
 	return &peerListener{Listener: ln, allowed: ac.allowed, logf: logf, lastLog: map[int]time.Time{}}, nil
+}
+
+// reachWarning names the first directory above the socket's that keeps the
+// other allowed users out, or returns "" when none does. The socket's own
+// directory is settled above (made 0710 for the group, or checked by
+// checkEnterable); this looks further up. The common trap is the default
+// socket under $XDG_RUNTIME_DIR, which is 0700 by definition: with
+// c1.allow_users set, the daemon would only ever see "permission denied".
+//
+// It warns rather than refuses: mode bits are all it reads, and an access
+// control list, or a group this process cannot look up, may still let the
+// users through.
+func reachWarning(dir string, ac access) string {
+	owners := map[int]bool{}
+	groups := map[int]bool{}
+	if ac.gid >= 0 {
+		groups[ac.gid] = true
+	}
+	for _, uid := range ac.others {
+		if uid == 0 {
+			continue // root passes every directory
+		}
+		owners[uid] = true
+		if u, err := user.LookupId(strconv.Itoa(uid)); err == nil {
+			if gids, err := u.GroupIds(); err == nil {
+				for _, g := range gids {
+					if n, err := strconv.Atoi(g); err == nil {
+						groups[n] = true
+					}
+				}
+			}
+		}
+	}
+	if len(owners) == 0 {
+		return ""
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+	for d := filepath.Dir(abs); ; d = filepath.Dir(d) {
+		if fi, err := os.Stat(d); err == nil {
+			uid, gid, _ := peercred.OwnerOf(fi)
+			perm := fi.Mode().Perm()
+			if perm&0o001 == 0 && !(perm&0o010 != 0 && groups[gid]) && !(perm&0o100 != 0 && owners[uid]) {
+				return fmt.Sprintf("c1: the users in c1.allow_users may not reach the socket, because %s (mode %04o) does not let them through; "+
+					"if anet cannot connect, put the socket where they can reach it, for example --c1-socket /run/anetlink/c1.sock", d, perm)
+			}
+		}
+		if filepath.Dir(d) == d {
+			return ""
+		}
+	}
 }
 
 // checkEnterable: users reach the socket only through its directory. An

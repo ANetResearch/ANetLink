@@ -2,6 +2,7 @@ package adap
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -131,6 +132,54 @@ func TestHostRefusesOtherUIDs(t *testing.T) {
 	defer h.mu.Unlock()
 	if h.conn != nil {
 		t.Fatal("the host adopted a connection from another uid")
+	}
+}
+
+// AL-10: a peer the kernel cannot vouch for is refused like another uid.
+func TestHostFailsClosedWhenCredentialsAreUnreadable(t *testing.T) {
+	saved := peerCredOf
+	t.Cleanup(func() { peerCredOf = saved })
+	peerCredOf = func(net.Conn) (peercred.Cred, error) {
+		return peercred.Cred{UID: -1, GID: -1, PID: -1}, errors.New("no creds")
+	}
+	sock := filepath.Join(privDir(t), "a.sock")
+	h, err := startHost(t, sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &Plugin{Name: "unknown", Protocol: "demo"}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := p.Dial(ctx, sock); err == nil {
+		p.Close()
+		t.Fatal("a connection with unreadable credentials completed the handshake")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.conn != nil {
+		t.Fatal("the host adopted a connection it could not identify")
+	}
+}
+
+// Start checks the directory itself rather than trusting an earlier Probe:
+// the directory may have changed in between, and Start is the moment that
+// counts.
+func TestHostStartChecksTheDirectoryWithoutProbe(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "open")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHost(HostConfig{Name: "test", Socket: filepath.Join(dir, "a.sock"), Timeout: 2 * time.Second})
+	err := h.Start(context.Background(), nil, newSink())
+	if err == nil {
+		h.Stop(context.Background())
+		t.Fatal("Start must refuse a world-writable directory on its own")
+	}
+	if !strings.Contains(err.Error(), "writable by other users") {
+		t.Fatalf("refusal should say why: %v", err)
 	}
 }
 
