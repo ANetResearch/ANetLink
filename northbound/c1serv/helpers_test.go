@@ -61,6 +61,7 @@ type fakeAdapter struct {
 	reply effect.Effect
 	fail  error
 	calls int
+	args  map[string]any // of the last call
 }
 
 func (f *fakeAdapter) Info() sdk.Info          { return sdk.Info{Name: "fake", Protocol: "fakeproto"} }
@@ -76,10 +77,11 @@ func (f *fakeAdapter) Start(_ context.Context, _ sdk.Backend, s sdk.Sink) error 
 		Profile: &profile.DeviceProfile{Schema: 1, Protocol: "fakeproto", Caps: caps, MaxTrust: profile.V4}})
 	return nil
 }
-func (f *fakeAdapter) Invoke(context.Context, sdk.Call) (effect.Effect, error) {
+func (f *fakeAdapter) Invoke(_ context.Context, call sdk.Call) (effect.Effect, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	f.args = call.Args
 	if f.fail != nil {
 		return effect.Effect{}, f.fail
 	}
@@ -87,6 +89,11 @@ func (f *fakeAdapter) Invoke(context.Context, sdk.Call) (effect.Effect, error) {
 		return effect.Effect{Status: effect.OK, Record: &tsir.EffectRecord{Metrics: map[string]float64{"done": 1}}}, nil
 	}
 	return f.reply, nil
+}
+func (f *fakeAdapter) lastArgs() map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.args
 }
 func (f *fakeAdapter) n() int {
 	f.mu.Lock()

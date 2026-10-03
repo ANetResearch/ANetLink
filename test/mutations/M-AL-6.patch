@@ -10,10 +10,10 @@ index 03d8698..7df5957 100644
  		return
  	}
 +	if who.Via == runtime.ViaRelay && !s.rt.RemoteAllowed(runtime.CapabilityID(capID, key)) {
-+		s.refuse(w, "not_permitted", "invoke %s: not open to remote callers", *req.Capability)
++		s.refuse(w, "not_permitted", "invoke %q: not open to remote callers", *req.Capability)
 +		return
 +	}
- 	eff, err := s.rt.Invoke(r.Context(), who, key, capID, req.Args)
+ 	eff, err := s.rt.Invoke(r.Context(), who, key, capID, jsonShapedArgs(req.Args))
  	switch {
  	case errors.Is(err, runtime.ErrNotPermitted):
 diff --git a/runtime/runtime.go b/runtime/runtime.go

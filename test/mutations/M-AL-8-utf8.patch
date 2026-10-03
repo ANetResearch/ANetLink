@@ -6,7 +6,7 @@ index 03d8698..ac41a40 100644
 --- a/northbound/c1serv/c1serv.go
 +++ b/northbound/c1serv/c1serv.go
 @@ -364,7 +364,7 @@ func (s *server) invoke(w http.ResponseWriter, r *http.Request) {
- 		s.refuse(w, "internal", "invoke %s: %v", *req.Capability, err)
+ 		s.refuse(w, "internal", "invoke %q: %v", *req.Capability, err)
  		return
  	}
 -	resp := invokeResp{Status: clean(string(eff.Status)), Message: clean(eff.Message)}

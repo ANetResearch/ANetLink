@@ -31,11 +31,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
+	"math/big"
 	"mime"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/ANetResearch/ANetCore/coredet"
@@ -239,6 +243,71 @@ func decodeInvokeReq(b []byte) (invokeReq, runtime.Caller, error) {
 	}
 }
 
+// jsonShapedArgs hands the adapters a call's arguments in the shape the MCP
+// entrance gives them, which is also the shape C1 v0 (JSON) gave them:
+// every number a float64, every map with text keys a map[string]any. CBOR
+// keeps an integer an integer and decodes a nested map as map[any]any, and
+// the adapters were written against the JSON shape (modbus and CAN read
+// args.value with v.(float64)). Without this, {"value": 20} from C1 would
+// fail where the same call from MCP succeeds: one capability, two answers.
+func jsonShapedArgs(args map[string]any) map[string]any {
+	if args == nil {
+		return nil
+	}
+	out := make(map[string]any, len(args))
+	for k, v := range args {
+		out[k] = jsonShaped(v)
+	}
+	return out
+}
+
+func jsonShaped(v any) any {
+	switch x := v.(type) {
+	case uint64:
+		return float64(x)
+	case int64:
+		return float64(x)
+	case big.Int:
+		f, _ := new(big.Float).SetInt(&x).Float64()
+		return f
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = jsonShaped(e)
+		}
+		return out
+	case map[string]any:
+		return jsonShapedArgs(x)
+	case map[any]any:
+		text := make(map[string]any, len(x))
+		for k, e := range x {
+			ks, ok := k.(string)
+			if !ok {
+				// Not a JSON object; keep its keys, shape its values.
+				kept := make(map[any]any, len(x))
+				for k, e := range x {
+					kept[k] = jsonShaped(e)
+				}
+				return kept
+			}
+			text[ks] = jsonShaped(e)
+		}
+		return text
+	}
+	return v
+}
+
+// oneLine keeps a log entry on one line. A refusal's detail can carry text
+// from the wire (an id, a path) or from a device, and a newline in it would
+// forge a second log line.
+func oneLine(s string) string {
+	if !strings.ContainsFunc(s, unicode.IsControl) {
+		return s
+	}
+	q := strconv.Quote(s)
+	return q[1 : len(q)-1]
+}
+
 // marshal is the encoder; a variable only so a test can prove the
 // read-back check below catches what an encoder lets through.
 var marshal = coredet.Marshal
@@ -281,7 +350,7 @@ type server struct {
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
 	if p == "/v0" || strings.HasPrefix(p, "/v0/") {
-		s.refuse(w, "c1_version", "%s %s: the client speaks C1 v0; upgrade anet and ANetLink to the same release", r.Method, p)
+		s.refuse(w, "c1_version", "%s %q: the client speaks C1 v0; upgrade anet and ANetLink to the same release", r.Method, p)
 		return
 	}
 	switch {
@@ -295,7 +364,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && p == "/v1/invoke":
 		s.invoke(w, r)
 	default:
-		s.refuse(w, "not_found", "%s %s: no such route", r.Method, p)
+		s.refuse(w, "not_found", "%s %q: no such route", r.Method, p)
 	}
 }
 
@@ -352,23 +421,34 @@ func (s *server) invoke(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, "unknown_capability", "invoke: %v", err)
 		return
 	}
-	eff, err := s.rt.Invoke(r.Context(), who, key, capID, req.Args)
+	eff, err := s.rt.Invoke(r.Context(), who, key, capID, jsonShapedArgs(req.Args))
 	switch {
 	case errors.Is(err, runtime.ErrNotPermitted):
-		s.refuse(w, "not_permitted", "invoke %s: %v", *req.Capability, err)
+		s.refuse(w, "not_permitted", "invoke %q: %v", *req.Capability, err)
 		return
 	case errors.Is(err, runtime.ErrUnknownCapability):
-		s.refuse(w, "unknown_capability", "invoke %s: %v", *req.Capability, err)
+		s.refuse(w, "unknown_capability", "invoke %q: %v", *req.Capability, err)
 		return
 	case err != nil:
-		s.refuse(w, "internal", "invoke %s: %v", *req.Capability, err)
+		s.refuse(w, "internal", "invoke %q: %v", *req.Capability, err)
 		return
 	}
 	resp := invokeResp{Status: clean(string(eff.Status)), Message: clean(eff.Message)}
 	if eff.Record != nil && len(eff.Record.Metrics) > 0 {
 		resp.Metrics = make(map[string]float64, len(eff.Record.Metrics))
 		for k, v := range eff.Record.Metrics {
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				// CoreDet has no NaN or infinity (C-R1), so the encoder
+				// would refuse the whole answer and an action that
+				// happened would come back as internal. Leave the one
+				// reading out and say so here.
+				s.logf("c1: invoke %q: metric %q is %v, which C1 cannot carry; left out", *req.Capability, k, v)
+				continue
+			}
 			resp.Metrics[clean(k)] = v
+		}
+		if len(resp.Metrics) == 0 {
+			resp.Metrics = nil
 		}
 	}
 	resp.Evidence = wireEvidence(eff.Evidence)
@@ -402,7 +482,7 @@ func (s *server) reply(w http.ResponseWriter, v any) {
 // refuse answers with the fixed Refusal for reason; detail goes to the
 // local log only (AL-4).
 func (s *server) refuse(w http.ResponseWriter, reason, format string, args ...any) {
-	s.logf("c1: %s: %s", reason, fmt.Sprintf(format, args...))
+	s.logf("c1: %s: %s", reason, oneLine(fmt.Sprintf(format, args...)))
 	w.Header().Set("Content-Type", contentCBOR)
 	w.WriteHeader(refusalStatus[reason])
 	_, _ = w.Write(refusalBody(reason))

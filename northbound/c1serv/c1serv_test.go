@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/ANetResearch/ANetCore/coredet"
 	"github.com/ANetResearch/ANetCore/effect"
+	"github.com/ANetResearch/ANetCore/tsir"
 	"github.com/fxamacker/cbor/v2"
 
 	"github.com/ANetResearch/ANetLink/runtime"
@@ -248,6 +250,80 @@ func TestInvalidUTF8MessageIsCleaned(t *testing.T) {
 	}
 	if out.Evidence == nil || out.Evidence.ObservedState != "on\uFFFD" {
 		t.Fatalf("evidence text not cleaned: %+v", out.Evidence)
+	}
+}
+
+// The adapters see the same argument shape whichever entrance a call came
+// through. MCP hands them JSON (float64 numbers, map[string]any objects);
+// CBOR keeps integers as integers and nested maps as map[any]any, and an
+// adapter that reads args.value with v.(float64) — modbus, CAN — would
+// refuse {"value": 20} from C1 and accept it from MCP.
+func TestArgsReachAdaptersInTheMCPShape(t *testing.T) {
+	r := newRig(t)
+	okResp(t, r.invoke(t, invokeReq{Capability: sp("x.do@fake/dev-1"), Caller: localCaller(), Args: map[string]any{
+		"value": uint64(20), "offset": int64(-3), "ratio": 0.5, "on": true, "label": "前门",
+		"rgb":  []any{uint64(255), int64(-1)},
+		"opts": map[any]any{"fade_ms": uint64(300), "deep": map[any]any{"n": uint64(1)}},
+		"ids":  map[any]any{uint64(7): uint64(8)},
+	}}))
+	want := map[string]any{
+		"value": 20.0, "offset": -3.0, "ratio": 0.5, "on": true, "label": "前门",
+		"rgb":  []any{255.0, -1.0},
+		"opts": map[string]any{"fade_ms": 300.0, "deep": map[string]any{"n": 1.0}},
+		"ids":  map[any]any{uint64(7): 8.0},
+	}
+	if got := r.fake.lastArgs(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("adapter got\n  %#v\nwant\n  %#v", got, want)
+	}
+
+	// a negative integer past int64 decodes as a big.Int; it too is a number
+	body := cat(cMap(3), cUint(1), cText("x.do@fake/dev-1"),
+		cUint(2), cMap(1), cText("v"), []byte{0x3b, 0x80, 0, 0, 0, 0, 0, 0, 0},
+		cUint(5), cMap(1), cUint(1), cUint(0))
+	okResp(t, r.do(t, http.MethodPost, "/v1/invoke", contentCBOR, body))
+	if v, ok := r.fake.lastArgs()["v"].(float64); !ok || v != -9223372036854775809 {
+		t.Fatalf("big negative integer reached the adapter as %#v", r.fake.lastArgs()["v"])
+	}
+}
+
+// A refusal's detail goes to the log, and text that came off the wire must
+// not be able to start a log line of its own.
+func TestRefusalDetailStaysOnOneLogLine(t *testing.T) {
+	r := newRig(t)
+	refusalOf(t, r.invoke(t, invokeReq{Capability: sp("x.do@fake/ghost\nc1: forged line"), Caller: localCaller()}),
+		http.StatusNotFound, "unknown_capability")
+	r.fake.fail = errors.New("adapter says\r\nc1: forged too")
+	refusalOf(t, r.invoke(t, invokeReq{Capability: sp("x.do@fake/dev-1"), Caller: localCaller()}),
+		http.StatusInternalServerError, "internal")
+	refusalOf(t, r.do(t, http.MethodGet, "/v1/x%0Ac1:%20forged", "", nil), http.StatusNotFound, "not_found")
+	r.logs.mu.Lock()
+	defer r.logs.mu.Unlock()
+	for _, l := range r.logs.lines {
+		if strings.ContainsAny(l, "\r\n") {
+			t.Errorf("log entry spans lines: %q", l)
+		}
+	}
+}
+
+// CoreDet has no NaN or infinity. A device that reports one must not turn
+// an action that happened into 500 internal; the reading is left out and
+// the rest of the answer goes back.
+func TestNonFiniteMetricIsLeftOut(t *testing.T) {
+	r := newRig(t)
+	r.fake.reply = effect.Effect{Status: effect.OK, Message: "done", Record: &tsir.EffectRecord{
+		Metrics: map[string]float64{"temp": math.NaN(), "hum": math.Inf(1), "power_state": 1}}}
+	out := okResp(t, r.invoke(t, invokeReq{Capability: sp("x.do@fake/dev-1"), Caller: localCaller()}))
+	if out.Status != "OK" || !reflect.DeepEqual(out.Metrics, map[string]float64{"power_state": 1}) {
+		t.Fatalf("answer %+v", out)
+	}
+	if r.logs.count(`metric "temp" is NaN`) != 1 || r.logs.count(`metric "hum" is +Inf`) != 1 {
+		t.Fatalf("left-out readings must be logged:\n%s", r.logs.all())
+	}
+
+	r.fake.reply = effect.Effect{Status: effect.OK, Record: &tsir.EffectRecord{Metrics: map[string]float64{"temp": math.NaN()}}}
+	out = okResp(t, r.invoke(t, invokeReq{Capability: sp("x.do@fake/dev-1"), Caller: localCaller()}))
+	if out.Metrics != nil {
+		t.Fatalf("no finite metric left must mean no metrics key: %+v", out.Metrics)
 	}
 }
 
