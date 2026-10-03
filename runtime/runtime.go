@@ -296,6 +296,11 @@ func (r *Runtime) Invoke(ctx context.Context, caller Caller, key DeviceKey, capa
 	if !ok {
 		return effect.Effect{}, fmt.Errorf("%w: unknown device %s", ErrUnknownCapability, key)
 	}
+	if e.dev.Profile == nil {
+		// Claimed but not yet described (ADAP sends claim before describe):
+		// it declares nothing yet, so nothing on it can be called.
+		return effect.Effect{}, fmt.Errorf("%w: device %s has not described itself yet", ErrUnknownCapability, key)
+	}
 	if !e.dev.Online {
 		return effect.Effect{Status: effect.Unavailable, Message: "device offline"}, nil
 	}

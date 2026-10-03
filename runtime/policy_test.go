@@ -31,6 +31,7 @@ func (c *countingSim) Start(ctx context.Context, b sdk.Backend, s sdk.Sink) erro
 	if err := c.Adapter.Start(ctx, b, s); err != nil {
 		return err
 	}
+	s.UpsertDevice(sdk.Device{ID: "bare-1", Online: true}) // claimed, not yet described
 	s.UpsertDevice(sdk.Device{
 		ID: "meter-1",
 		Profile: &profile.DeviceProfile{
@@ -185,6 +186,7 @@ func TestUnknownCapabilityErrors(t *testing.T) {
 		{DeviceKey{"nope", sim.DeviceID}, "light.onoff"},
 		{lamp, "thermostat.set"},
 		{DeviceKey{"sim", "meter-1"}, "sensor.power"}, // STATE-only: declared, not invokable
+		{DeviceKey{"sim", "bare-1"}, "light.onoff"},   // no profile yet
 	} {
 		_, err := rt.Invoke(context.Background(), local, c.key, c.cap, nil)
 		if !errors.Is(err, ErrUnknownCapability) {
